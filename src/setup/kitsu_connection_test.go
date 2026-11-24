@@ -195,12 +195,12 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	if !strings.Contains(body, `name="kitsu_hostname"`) {
 		t.Fatal("expected a named Kitsu hostname field")
 	}
-	for _, want := range []string{`name="kitsu_external_url"`, `id="external-kitsu-url-form"`, `name="action" value="save_external_kitsu_url"`, "External Kitsu URL (optional)", "Only the External Kitsu URL needed for Kitsu links in Discord notifications is shown as a normal setting.", "Check link", "Save"} {
+	for _, want := range []string{`name="kitsu_external_url"`, `id="external-kitsu-url-form"`, `name="action" value="save_external_kitsu_url"`, "External Kitsu URL (for links)", "Used for links in Discord notifications.", "Check link", "Save"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("external Kitsu URL field missing %q", want)
 		}
 	}
-	if !strings.Contains(body, `id="save-external-kitsu-url" type="submit" class="btn" disabled`) {
+	if !strings.Contains(body, `id="save-external-kitsu-url" type="submit" form="external-kitsu-url-form" class="btn sm" disabled`) {
 		t.Fatal("external URL Save must start disabled until the field changes")
 	}
 	controls := body[strings.Index(body, `<div class="connection-external-url-controls">`):]
@@ -211,11 +211,8 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	if !strings.Contains(body, `data-initial-value="https://external.kitsu.example.test"`) {
 		t.Fatal("external URL field must retain its saved value as the change baseline")
 	}
-	if !strings.Contains(body, "externalURLSaveButton.disabled=externalURL.value===externalURL.getAttribute('data-initial-value')") {
+	if strings.Contains(body, "externalURLSaveButton.disabled=externalURL.value===externalURL.getAttribute('data-initial-value')") == false {
 		t.Fatal("external URL Save must enable only after the value changes")
-	}
-	if !strings.Contains(body, "When empty, the Kitsu URL is used.") {
-		t.Fatal("missing external URL fallback copy")
 	}
 	if strings.Contains(body, `name="kitsu_runtime_email"`) || strings.Contains(body, `name="kitsu_runtime_password"`) {
 		t.Fatal("did not expect human Kitsu credential controls in the current Connections form")
@@ -226,7 +223,7 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	if !strings.Contains(body, `name="bot_token"`) {
 		t.Fatal("expected the Discord Bot token field")
 	}
-	if got := strings.Count(body, `class="connection-save-form`); got != 3 {
+	if got := strings.Count(body, `<form method="POST"`); got != 3 {
 		t.Fatalf("expected three independent save forms, got %d", got)
 	}
 	if !strings.Contains(body, `id="kitsu-connection-form"`) || !strings.Contains(body, `form="kitsu-connection-form"`) {
@@ -244,7 +241,7 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	if strings.Contains(body, `name="kitsu_bot_token" value=`) || strings.Contains(body, `name="bot_token" value=`) {
 		t.Fatal("did not expect stored secrets in rendered fields")
 	}
-	if strings.Count(body, `class="connection-save-form`) != 3 {
+	if strings.Count(body, `class="connection-save-form"`) != 2 || !strings.Contains(body, `id="external-kitsu-url-form"`) {
 		t.Fatal("expected exactly three independent save-form boundaries")
 	}
 	if strings.Contains(body, "Kitsu Runtime") || strings.Contains(body, "Runtime email") || strings.Contains(body, "Runtime password") || strings.Contains(body, "Legacy fallback") {
@@ -253,8 +250,8 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	if strings.Index(body, `name="kitsu_bot_token"`) > strings.Index(body, `name="bot_token"`) {
 		t.Fatal("expected Kitsu Bot fields before the Discord section")
 	}
-	if !strings.Contains(body, "Enter a new token only when needed. Saved tokens are never displayed. Changes take effect after saving.") || strings.Contains(body, `placeholder="••••••••••••••••••••"`) {
-		t.Fatal("token fields must use the canonical concise helper without a mask-looking placeholder")
+	if strings.Contains(body, `placeholder="••••••••••••••••••••"`) {
+		t.Fatal("unset token fields must not show a mask-looking placeholder")
 	}
 	if strings.Contains(body, "Change token") || strings.Contains(body, `id="kitsu-bot-token" type="password" name="kitsu_bot_token" autocomplete="new-password" aria-describedby="kitsu-token-help" hidden style="display:none"`) || strings.Contains(body, `id="discord-bot-token" type="password" name="bot_token" autocomplete="new-password" aria-describedby="discord-token-help" hidden style="display:none"`) {
 		t.Fatal("unset token fields should remain editable without saved-secret controls")
@@ -418,9 +415,6 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 			t.Fatalf("saved-secret form missing %q", want)
 		}
 	}
-	if strings.Count(body, "Enter a new token only when needed. Saved tokens are never displayed. Changes take effect after saving.") != 2 {
-		t.Fatal("configured Kitsu and Discord controls must share the concise token helper")
-	}
 	if strings.Contains(body, "The saved token is never displayed. Recheck without entering it again") || strings.Contains(body, "保存済みtokenは表示しません。再確認では再入力不要です") {
 		t.Fatal("configured token controls retained the obsolete Kitsu-only helper")
 	}
@@ -429,25 +423,26 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 			t.Fatalf("saved secret or mask leaked into form: %q", secret)
 		}
 	}
-	if strings.Count(body, `placeholder="••••••••••••••••••••"`) < 1 || strings.Count(body, "Change token") < 1 || strings.Count(body, "Cancel") < 1 {
+	if strings.Count(body, `placeholder="••••••••••••••••••••"`) != 2 || strings.Count(body, "Change token") != 2 || strings.Count(body, "Cancel") < 2 {
 		t.Fatal("saved token controls must remain visible with masked placeholders and change/cancel actions")
 	}
-	if strings.Count(body, `class="section-card glass editorial-advanced-settings"`) != 1 || strings.Count(body, `class="connection-expert-network"`) != 1 {
-		t.Fatal("advanced connection settings must use one restrained expert disclosure")
+	if strings.Count(body, `class="connection-advanced-details" id="connections-advanced"`) != 1 {
+		t.Fatal("advanced connection settings must use one restrained disclosure inside the Kitsu card")
 	}
-	if !strings.Contains(body, `class="connection-expert-network" data-expert-network-overrides open`) || !strings.Contains(body, `value="https://api.kitsu.example.test"`) {
-		t.Fatal("saved API Base URL must keep the expert disclosure visible and editable")
+	if !strings.Contains(body, `value="https://api.kitsu.example.test"`) {
+		t.Fatal("saved API Base URL must remain editable inside advanced settings")
 	}
 	if strings.Contains(body, "An internal route used only by KitsuSync") || strings.Contains(body, "KitsuSyncだけが使う内部経路です") {
 		t.Fatal("advanced settings retained redundant internal-route helper copy")
 	}
-	advanced := strings.Index(body, `class="section-card glass editorial-advanced-settings"`)
-	if advanced < strings.Index(body, `class="connections-edit-grid"`) {
-		t.Fatal("advanced settings must follow the parallel service forms")
+	kitsuCard := strings.Index(body, `id="kitsu-connection-form"`)
+	advanced := strings.Index(body, `id="connections-advanced"`)
+	if advanced < kitsuCard {
+		t.Fatal("advanced settings must be inside the Kitsu connection card")
 	}
 	for _, field := range []string{`name="kitsu_external_url"`, `name="kitsu_internal_url"`, `name="kitsu_api_base_url"`} {
-		if !strings.Contains(body[advanced:], field) {
-			t.Fatalf("advanced settings missing %s", field)
+		if !strings.Contains(body[kitsuCard:], field) {
+			t.Fatalf("Kitsu connection card missing %s", field)
 		}
 	}
 	if !strings.Contains(body, `data-kitsu-internal-endpoint hidden`) {
@@ -457,7 +452,7 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 
 func TestConnectionsEditShowsResolvedEndpointBeforeManualOverride(t *testing.T) {
 	body := renderConnectionsEditFormWithIdentityRows("en", httptest.NewRequest("GET", "/bot/admin/bot?edit=1&lang=en", nil), nil, "Review connections separately.", "warning", "Needs review", "https://kitsu.example.test/", false, false, "")
-	for _, want := range []string{"Kitsu host", "https://kitsu.example.test", "Detected automatically or loaded from the saved configuration.", "Manual setup", "Automatic", `data-kitsu-endpoint-auto`, `data-kitsu-endpoint-manual hidden style="display:none"`, `data-kitsu-host-auto`, `data-reset-kitsu-endpoint`, "setVisible", "setEndpointMode"} {
+	for _, want := range []string{"Kitsu host", "https://kitsu.example.test", "Kitsu endpoint (for API)", "Manual setup", "Automatic", `data-endpoint-mode="auto"`, `data-endpoint-mode="manual"`, `data-kitsu-endpoint-auto`, `data-kitsu-endpoint-manual hidden style="display:none"`, `data-kitsu-host-auto`, "setVisible", "setEndpointMode"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("resolved endpoint UI missing %q", want)
 		}
@@ -477,8 +472,8 @@ func TestConnectionsEditShowsResolvedEndpointBeforeManualOverride(t *testing.T) 
 	if strings.Count(body, `<div data-kitsu-endpoint-auto>`) != 1 || strings.Count(body, `<div class="connection-host-manual" data-kitsu-endpoint-manual`) != 1 {
 		t.Fatal("automatic endpoint mode must keep one auto and one switchable manual slot")
 	}
-	if !strings.Contains(body, "Enter a new token only when needed. Saved tokens are never displayed. Changes take effect after saving.") || strings.Contains(body, "The saved token is never displayed. Recheck without entering it again") {
-		t.Fatal("token controls must use the concise shared helper")
+	if strings.Contains(body, "The saved token is never displayed. Recheck without entering it again") {
+		t.Fatal("token controls retained obsolete helper")
 	}
 	if !strings.Contains(body, `class="button-row connections-navigation connections-footer"`) {
 		t.Fatal("connections back link must use the restrained footer structure")
@@ -487,13 +482,13 @@ func TestConnectionsEditShowsResolvedEndpointBeforeManualOverride(t *testing.T) 
 
 func TestConnectionsEditManualEndpointUsesOneControl(t *testing.T) {
 	body := renderConnectionsEditFormWithIdentityRows("en", httptest.NewRequest("GET", "/bot/admin/bot?edit=1&lang=en", nil), nil, "", "warning", "Needs review", "", false, false, "")
-	if strings.Contains(body, `<div data-kitsu-endpoint-auto>`) || strings.Contains(body, `data-kitsu-host-auto>`) {
-		t.Fatal("manual endpoint mode must not render the automatic endpoint representation")
+	if !strings.Contains(body, `data-kitsu-endpoint-auto hidden style="display:none"`) || !strings.Contains(body, `data-kitsu-host-auto disabled`) {
+		t.Fatal("manual endpoint mode must keep the automatic endpoint hidden and disabled")
 	}
-	if strings.Count(body, `id="kitsu-hostname"`) != 1 || strings.Count(body, `name="kitsu_hostname"`) != 1 {
+	if strings.Count(body, `id="kitsu-hostname"`) != 1 {
 		t.Fatal("manual endpoint mode must render exactly one editable host control")
 	}
-	if !strings.Contains(body, `data-kitsu-endpoint-manual`) || !strings.Contains(body, `data-reset-kitsu-endpoint`) || !strings.Contains(body, "Automatic") {
+	if !strings.Contains(body, `<div class="connection-host-manual" data-kitsu-endpoint-manual>`) || !strings.Contains(body, `data-endpoint-mode="auto"`) || !strings.Contains(body, "Automatic") {
 		t.Fatal("manual endpoint mode must provide the automatic-mode action in the same slot")
 	}
 }
@@ -503,17 +498,17 @@ func TestConnectionsDisplayUsesSharedFieldRows(t *testing.T) {
 	req := httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil)
 	body := renderConnectionsDisplayBodyWithHealthRaw("ja", req, db, "Kitsu接続を設定してください", "bad", "対応が必要", "http://127.0.0.1:8080", "", false, false)
 
-	if got := strings.Count(body, `class="connection-field-row"`); got != 3 {
-		t.Fatalf("expected host and two safe token rows in the summary, got %d", got)
+	if got := strings.Count(body, `class="conn-robox is-unset"`); got != 2 {
+		t.Fatalf("expected two safe unset token boxes in the summary, got %d", got)
 	}
-	if !strings.Contains(body, `class="connection-field-list"`) || !strings.Contains(body, `class="status-pill warning"`) {
-		t.Fatal("expected shared field-list and semantic status badge")
+	if !strings.Contains(body, `class="hostrow"><span class="hostval">http://127.0.0.1:8080</span>`) || !strings.Contains(body, `class="status-pill warning"`) {
+		t.Fatal("expected external URL hostrow and semantic status badge")
 	}
 	if strings.Contains(body, "host.docker.internal") || strings.Contains(body, "&lt;span") || strings.Contains(body, "<span class=\"status-pill bad\">対応が必要</span>") {
 		t.Fatal("did not expect internal endpoint or literal status markup")
 	}
-	if !strings.Contains(body, "Kitsu Bot APIトークン") || !strings.Contains(body, "Discord Botトークン") {
-		t.Fatal("normal Connections view is missing the canonical safe token rows")
+	if !strings.Contains(body, "Kitsu Bot APIトークン") || !strings.Contains(body, "外部 Kitsu URL（リンク用）") || !strings.Contains(body, "Discord Botトークン") {
+		t.Fatal("normal Connections view is missing the canonical safe field labels")
 	}
 }
 

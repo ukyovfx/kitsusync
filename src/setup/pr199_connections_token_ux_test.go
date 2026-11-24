@@ -38,7 +38,7 @@ func TestPR199ConnectionsSavedTokenControlsAreMaskedAndReversible(t *testing.T) 
 		}
 	}
 
-	copy := "Only the External Kitsu URL needed for Kitsu links in Discord notifications is shown as a normal setting. When empty, the Kitsu URL is used."
+	copy := "Used for links in Discord notifications."
 	if strings.Count(body, copy) != 1 {
 		t.Fatalf("External Kitsu URL explanation count=%d, want 1", strings.Count(body, copy))
 	}
