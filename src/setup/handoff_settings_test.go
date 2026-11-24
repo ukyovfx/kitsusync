@@ -112,7 +112,7 @@ func TestStudioRoutesSectionRendersOnConnectionSettings(t *testing.T) {
 	stubHandoffTaskTypes(t, handoffTaskTypes())
 	db := newForumPageDB(t)
 	body := studioRoutesSection(t, db)
-	for _, want := range []string{"Handoff wiring (studio default)", `name="action" value="save_studio_routes"`, `name="st_notify_tt-lay"`, `name="st_none_tt-comp"`, `<details class="handoff-route-details">`} {
+	for _, want := range []string{"Handoff wiring (studio default)", `name="action" value="save_studio_routes"`, `name="st_notify_tt-lay"`, `name="st_none_tt-comp"`, `class="route-row"`, `data-route-row="tt-lay"`, "Add a source", `data-route-source-select`, `data-route-source-add`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("studio section is missing %q", want)
 		}
