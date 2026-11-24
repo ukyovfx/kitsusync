@@ -171,8 +171,8 @@ func TestBotHandler_EditFormShowsDurablePersistenceCopy(t *testing.T) {
 	model.SetSetting(db, "kitsu.hostname", "http://kitsu.local/")
 
 	resetSessions()
-	token := newSessionToken("manager@example.com", "jwt", "manager", "/bot/admin/bot/connections?edit=1&lang=en")
-	req := httptest.NewRequest(http.MethodGet, "/bot/admin/bot/connections?edit=1&lang=en", nil)
+	token := newSessionToken("manager@example.com", "jwt", "manager", "/bot/admin/bot?edit=1&lang=en")
+	req := httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang=en", nil)
 	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
 	rr := httptest.NewRecorder()
 

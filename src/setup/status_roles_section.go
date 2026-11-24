@@ -176,7 +176,7 @@ func renderStatusRolesSection(db *gorm.DB, lang string, r *http.Request) string 
 		`<input type="hidden" name="action" value="save_status_roles">` +
 		`<section class="flat-section" id="status-roles">` +
 		note + selector + body.String() +
-		`<div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "接続設定トップへ戻る", "Back to Connections hub")) + `</a><button type="submit" class="btn">` + esc(t(lang, "保存", "Save")) + `</button></div></section></form>` + statusRolesEditorScript
+		`<div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "接続設定へ戻る", "Back to Connections")) + `</a><button type="submit" class="btn">` + esc(t(lang, "保存", "Save")) + `</button></div></section></form>` + statusRolesEditorScript
 }
 
 // renderStatusRolesDisplay is the read-only form of the same assignment on

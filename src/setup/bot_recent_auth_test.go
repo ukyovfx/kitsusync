@@ -145,7 +145,7 @@ func TestNormalLoginGrantsRecentAuthenticationForConnectionsEdit(t *testing.T) {
 	}
 
 	db := newSetupStateTestDB(t)
-	edit := httptest.NewRequest(http.MethodGet, "/bot/admin/bot/connections?edit=1&lang=en", nil)
+	edit := httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang=en", nil)
 	edit.AddCookie(cookie)
 	response := httptest.NewRecorder()
 	BotHandler(db, nil)(response, edit)

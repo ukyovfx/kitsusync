@@ -130,18 +130,24 @@ func TestStatusRolesDisplayOmitsProductionHeadingAndSummaryLine(t *testing.T) {
 	}
 }
 
-func TestBotHubHasNoEditFormsAndLinksToSubpages(t *testing.T) {
+func TestConnectionsPageRendersDirectlyAndSubpageRedirects(t *testing.T) {
 	db := newSetupStateTestDB(t)
 	w := httptest.NewRecorder()
 	BotHandler(db, nil)(w, httptest.NewRequest(http.MethodGet, "/bot/admin/bot?lang=ja", nil))
 	body := w.Body.String()
-	for _, want := range []string{`data-bot-hub`, `/bot/admin/bot/connections`, `/bot/admin/bot/statuses`, `/bot/admin/bot/wiring`, "接続設定", "タスクステータス", "受け渡しの配線"} {
+	for _, want := range []string{"接続設定", "Kitsu接続", "Discord Bot接続", "接続設定を編集", `/bot/admin/bot?edit=1`, `/bot/admin/bot/statuses`, `/bot/admin/bot/wiring`, "タスクステータス", "受け渡しの配線"} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("hub missing %q", want)
+			t.Fatalf("connections page missing %q", want)
 		}
 	}
-	if strings.Contains(body, "<form") {
-		t.Fatalf("hub must not contain edit forms")
+	if strings.Contains(body, `data-bot-hub`) {
+		t.Fatalf("connections page must not render hub")
+	}
+
+	redir := httptest.NewRecorder()
+	BotHandler(db, nil)(redir, httptest.NewRequest(http.MethodGet, "/bot/admin/bot/connections?edit=1&lang=en", nil))
+	if redir.Code != http.StatusSeeOther || redir.Header().Get("Location") != "/bot/admin/bot?edit=1&lang=en" {
+		t.Fatalf("expected redirect from /bot/admin/bot/connections to /bot/admin/bot?edit=1&lang=en, got status=%d location=%q", redir.Code, redir.Header().Get("Location"))
 	}
 }
 

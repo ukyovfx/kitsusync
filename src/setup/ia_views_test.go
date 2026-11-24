@@ -937,7 +937,7 @@ func TestConnectionsPageUsesCatalogLabelsAndUnescapedStatusMarkup(t *testing.T) 
 	discoveryMu.Unlock()
 	db := newIAViewDB(t)
 	w := httptest.NewRecorder()
-	BotHandler(db, nil)(w, httptest.NewRequest("GET", "/bot/admin/bot/connections?lang=ja", nil))
+	BotHandler(db, nil)(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil))
 	body := w.Body.String()
 	for _, want := range []string{"\u63a5\u7d9a\u8a2d\u5b9a", "Kitsu\u63a5\u7d9a", "Discord Bot\u63a5\u7d9a", "\u672a\u8a2d\u5b9a"} {
 		if !strings.Contains(body, want) {
@@ -967,7 +967,7 @@ func TestConnectionsPageUsesCatalogLabelsAndUnescapedStatusMarkup(t *testing.T) 
 	}
 
 	w = httptest.NewRecorder()
-	BotHandler(db, nil)(w, httptest.NewRequest("GET", "/bot/admin/bot/connections?lang=en", nil))
+	BotHandler(db, nil)(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=en", nil))
 	enBody := w.Body.String()
 	if strings.Count(enBody, "<h1") != 1 || !strings.Contains(enBody, `<section class="section-card glass connections-card">`) {
 		t.Fatal("English Connections page does not preserve the shared page-shell structure")
@@ -1005,7 +1005,7 @@ func TestConnectionsSummaryUsesTwoExplicitPeerCards(t *testing.T) {
 	if got := strings.Count(body, "Edit connection settings"); got != 1 {
 		t.Fatalf("expected 1 unified edit connection button in English summary, got %d", got)
 	}
-	if !strings.Contains(body, `href="/bot/admin/bot/connections?edit=1&amp;lang=en">Edit connection settings</a>`) {
+	if !strings.Contains(body, `href="/bot/admin/bot?edit=1&amp;lang=en">Edit connection settings</a>`) {
 		t.Fatal("unified edit connection button missing ?edit=1 target")
 	}
 	body = renderConnectionsDisplayBodyWithHealth("ja", httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil), db, "", "ok", "接続済み", "https://kitsu.example.test", "configured-token", true, true)

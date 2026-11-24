@@ -450,7 +450,7 @@ func renderStudioRoutesSection(db *gorm.DB, lang string, r *http.Request) string
 		`<section class="flat-section" id="studio-routes">` +
 		`<p class="field-help">` + esc(t(lang, "タスクが完了したとき、同じショット/アセットの次工程へ「進めていい」と伝える配線です。", "Wiring that tells the next task types on the same shot or asset they may proceed when a task finishes.")) + `</p>` +
 		rows.String() + addSource +
-		`<div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "接続設定トップへ戻る", "Back to Connections hub")) + `</a><button type="submit" class="btn">` + esc(t(lang, "保存", "Save")) + `</button></div></section></form>` + studioRoutesEditorScript
+		`<div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "接続設定へ戻る", "Back to Connections")) + `</a><button type="submit" class="btn">` + esc(t(lang, "保存", "Save")) + `</button></div></section></form>` + studioRoutesEditorScript
 }
 
 // studioRoutesEditorScript drives the wiring editor's chips: the hidden
