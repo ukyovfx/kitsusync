@@ -90,14 +90,14 @@ func TestHandoffPageShowsRoutesNotMatrix(t *testing.T) {
 		t.Fatalf("status = %d", w.Code)
 	}
 	body := w.Body.String()
-	for _, want := range []string{"Overrides for this Production", `name="ov_mode_tt-lay"`, `name="no_assignee"`, `/bot/admin/bot?edit=1`} {
+	for _, want := range []string{"Overrides for this Production", `name="ov_mode_tt-lay"`, `name="no_assignee"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("page is missing %q", want)
 		}
 	}
 	// The studio editor moved to the connection settings page: its inputs
-	// no longer render here.
-	for _, gone := range []string{`name="st_notify_tt-lay"`, `name="st_none_tt-comp"`, `name="row_task"`, `name="product_name"`, `name="notify_timing"`, `data-handoff-cell`} {
+	// and the studio note no longer render here.
+	for _, gone := range []string{`name="st_notify_tt-lay"`, `name="st_none_tt-comp"`, `name="row_task"`, `name="product_name"`, `name="notify_timing"`, `data-handoff-cell`, "Handoff wiring (studio default)", "Open connection settings", `/bot/admin/bot?edit=1`} {
 		if strings.Contains(body, gone) {
 			t.Fatalf("page still carries the abolished control %q", gone)
 		}

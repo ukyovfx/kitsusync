@@ -554,10 +554,6 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 		fallbackOptionsList = append(fallbackOptionsList, [2]string{fallback, handoffFallbackLabel(lang, fallback)})
 	}
 
-	studioNote := `<section class="flat-section"><h2>` + esc(t(lang, "受け渡しの配線（スタジオ共通）", "Handoff wiring (studio default)")) + `</h2>` +
-		`<p class="field-help">` + esc(t(lang, "スタジオ共通の配線は接続設定で編集します。このページでは、この製作だけの上書きと担当者なしの扱いを設定します。", "Studio-default wiring is edited in connection settings. This page sets only this Production's overrides and the no-assignee handling.")) + `</p>` +
-		`<div class="button-row"><a class="btn" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `">` + esc(t(lang, "接続設定を開く", "Open connection settings")) + `</a></div></section>`
-
 	fallbackUserHidden := ""
 	if config.NoAssignee != model.HandoffFallbackUsers {
 		fallbackUserHidden = " hidden"
@@ -579,7 +575,7 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 		`<div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)) + `">` + esc(t(lang, "通知設定に戻る", "Back to notifications")) + `</a> <button type="submit" class="btn">` + esc(t(lang, "保存", "Save")) + `</button></div></form>`
 
 	breadcrumb := `<div class="prodname"><span class="lbl">` + esc(t(lang, "プロダクション", "Production")) + `</span><span class="name">` + esc(project.Name) + `</span></div>`
-	body := `<div class="section-stack">` + breadcrumb + errorHTML + notices.String() + studioNote + form + `</div>` + handoffPageScript
+	body := `<div class="section-stack">` + breadcrumb + errorHTML + notices.String() + form + `</div>` + handoffPageScript
 	return adminPage(lang, t(lang, "受け渡しの配線", "Handoff wiring"), r, body)
 }
 

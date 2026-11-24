@@ -1992,10 +1992,6 @@ func renderConnectionsDisplayBodyWithHealthRaw(lang string, r *http.Request, db 
 	} else if discordConfigured {
 		discordNote = t(lang, "Discord Botの接続を確認してください。", "Check the Discord Bot connection.")
 	}
-	discordEditLabel := t(lang, "編集", "Edit")
-	if !discordConfigured {
-		discordEditLabel = t(lang, "編集して設定", "Edit and configure")
-	}
 	extra := ""
 	if db != nil {
 		extra = renderStatusRolesDisplay(db, lang, r) + renderStudioRoutesDisplay(db, lang, r)
@@ -2007,13 +2003,11 @@ func renderConnectionsDisplayBodyWithHealthRaw(lang string, r *http.Request, db 
 		`<div class="hostrow"><span class="hostval">` + esc(linkURL) + `</span></div>` +
 		`<p class="conn-note">` + esc(t(lang, "Discord通知のリンクに使います。", "Used for links in Discord notifications.")) + `</p>` +
 		`<details class="connection-advanced-details"><summary><span>` + esc(t(lang, "詳細設定", "Advanced settings")) + `</span><span class="v">` + esc(t(lang, "接続先（API用）：", "API endpoint: ")) + esc(endpointModeLabel) + ` <span class="chev">▸</span></span></summary>` +
-		`<div style="margin-top:10px;"><label class="conn-field-label">` + esc(t(lang, "Kitsu接続先（API用）", "Kitsu endpoint (for API)")) + `</label><div class="hostrow"><span class="hostval">` + esc(host) + `</span></div>` + apiBaseRow + `</div></details>` +
-		`<div class="button-row conn-card-actions"><a class="btn" href="` + esc(editURL) + `">` + esc(t(lang, "編集", "Edit")) + `</a></div></section>` +
+		`<div style="margin-top:10px;"><label class="conn-field-label">` + esc(t(lang, "Kitsu接続先（API用）", "Kitsu endpoint (for API)")) + `</label><div class="hostrow"><span class="hostval">` + esc(host) + `</span></div>` + apiBaseRow + `</div></details></section>` +
 		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><span class="status-pill ` + esc(discordStatus.Class) + `" role="status">` + esc(discordStatus.Label) + `</span></div>` +
 		`<label class="conn-field-label">` + esc(t(lang, "Discord Botトークン", "Discord Bot Token")) + `</label>` + discordTokenBox +
-		`<p class="conn-note">` + esc(discordNote) + `</p>` +
-		`<div class="button-row conn-card-actions"><a class="btn" href="` + esc(editURL) + `">` + esc(discordEditLabel) + `</a></div></section>` +
-		`</div><div class="button-row connections-actions"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(t(lang, "プロダクション一覧へ戻る", "Back to Productions")) + `</a></div>` + extra
+		`<p class="conn-note">` + esc(discordNote) + `</p></section>` +
+		`</div><div class="button-row connections-actions"><a class="btn" href="` + esc(editURL) + `">` + esc(t(lang, "接続設定を編集", "Edit connection settings")) + `</a><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(t(lang, "プロダクション一覧へ戻る", "Back to Productions")) + `</a></div>` + extra
 }
 
 func renderConnectionsDisplayBodyWithHealth(lang string, r *http.Request, db *gorm.DB, statusHint, statusClass, statusLabel, host, botToken string, kitsuHealthy, discordHealthy bool) string {

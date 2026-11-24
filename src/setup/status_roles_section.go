@@ -229,23 +229,7 @@ func renderStatusRolesDisplay(db *gorm.DB, lang string, r *http.Request) string 
 	if len(blocks) == 0 {
 		return ""
 	}
-	var body strings.Builder
-	for _, block := range blocks {
-		body.WriteString(`<h3>` + esc(block.name) + `</h3>`)
-		complete := true
-		for _, speaking := range speakingRoles {
-			if roleCountsOf(block)[speaking.role] == 0 {
-				complete = false
-			}
-		}
-		dot := "#C45656"
-		if complete {
-			dot = "#4FAF78"
-		}
-		body.WriteString(`<p class="role-summary-line"><span style="color:` + dot + `">●</span> ` + roleSummaryLine(lang, block) + `</p>`)
-		body.WriteString(renderRoleBoxes(lang, block, nil, false))
-	}
-	return `<section class="flat-section" aria-labelledby="status-roles-display-title"><div class="flat-section-head"><h2 id="status-roles-display-title">` + esc(t(lang, "Kitsuのステータス → 役割", "Kitsu status → role")) + `</h2><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `#status-roles">` + esc(t(lang, "編集", "Edit")) + `</a></div>` + body.String() + `</section>`
+	return `<section class="flat-section" aria-labelledby="status-roles-display-title"><div class="flat-section-head"><h2 id="status-roles-display-title">` + esc(t(lang, "Kitsuのステータス → 役割", "Kitsu status → role")) + `</h2><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `#status-roles">` + esc(t(lang, "編集", "Edit")) + `</a></div>` + renderRoleBoxes(lang, blocks[0], nil, false) + `</section>`
 }
 
 // saveStatusRoles applies one bot-page submit to every Production it carries

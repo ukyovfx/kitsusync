@@ -999,9 +999,24 @@ func TestConnectionsSummaryUsesTwoExplicitPeerCards(t *testing.T) {
 	if strings.Contains(body, `connections-card-header"><div>`) || strings.Contains(body, `role="status">Connected</span></div><section`) {
 		t.Fatal("summary retained the redundant combined status header")
 	}
+	if strings.Contains(body, "conn-card-actions") || strings.Contains(body, "Edit and configure") {
+		t.Fatal("summary retained per-card edit buttons")
+	}
+	if got := strings.Count(body, "Edit connection settings"); got != 1 {
+		t.Fatalf("expected 1 unified edit connection button in English summary, got %d", got)
+	}
+	if !strings.Contains(body, `href="/bot/admin/bot?edit=1&amp;lang=en">Edit connection settings</a>`) {
+		t.Fatal("unified edit connection button missing ?edit=1 target")
+	}
 	body = renderConnectionsDisplayBodyWithHealth("ja", httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil), db, "", "ok", "接続済み", "https://kitsu.example.test", "configured-token", true, true)
 	if !strings.Contains(body, "Kitsu接続") || !strings.Contains(body, "Discord Bot接続") || strings.Contains(body, "configured-token") || !strings.Contains(body, connectionSecretMask) {
 		t.Fatal("Japanese summary did not preserve explicit service labels or secret safety")
+	}
+	if strings.Contains(body, "conn-card-actions") || strings.Contains(body, "編集して設定") {
+		t.Fatal("Japanese summary retained per-card edit buttons")
+	}
+	if got := strings.Count(body, "接続設定を編集"); got != 1 {
+		t.Fatalf("expected 1 unified edit connection button in Japanese summary, got %d", got)
 	}
 }
 
