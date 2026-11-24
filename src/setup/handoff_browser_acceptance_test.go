@@ -91,7 +91,11 @@ func TestHandoffBrowserAcceptance(t *testing.T) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/bot/admin/handoff", HandoffSettingsHandler(db))
-	mux.HandleFunc("/bot/admin/bot", BotHandlerWithRuntime(db, nil, func() bool { return true }))
+	botHandler := BotHandlerWithRuntime(db, nil, func() bool { return true })
+	mux.HandleFunc("/bot/admin/bot", botHandler)
+	mux.HandleFunc("/bot/admin/bot/connections", botHandler)
+	mux.HandleFunc("/bot/admin/bot/statuses", botHandler)
+	mux.HandleFunc("/bot/admin/bot/wiring", botHandler)
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
@@ -99,7 +103,7 @@ func TestHandoffBrowserAcceptance(t *testing.T) {
 	cmd.Dir = workDir
 	cmd.Env = append(os.Environ(),
 		"HANDOFF_TEST_URL="+server.URL+"/bot/admin/handoff?project=p1&lang=ja",
-		"HANDOFF_BOT_URL="+server.URL+"/bot/admin/bot?edit=1&lang=ja",
+		"HANDOFF_BOT_URL="+server.URL+"/bot/admin/bot/wiring?lang=ja",
 		"HANDOFF_SCREENSHOTS_DIR="+outputDir,
 	)
 	output, err := cmd.CombinedOutput()

@@ -41,7 +41,7 @@ func TestLegacySessionRuntimeSetupRedirectsToKitsuSettings(t *testing.T) {
 	rr := httptest.NewRecorder()
 	Handler("http://kitsu.invalid/", "", "", db, func() bool { return false }, nil)(rr, req)
 
-	if rr.Code != http.StatusSeeOther || !strings.Contains(rr.Header().Get("Location"), "/bot/admin/bot?edit=1") {
+	if rr.Code != http.StatusSeeOther || !strings.Contains(rr.Header().Get("Location"), "/bot/admin/bot/connections?edit=1") {
 		t.Fatalf("legacy runtime setup did not redirect to Kitsu settings: status=%d location=%q", rr.Code, rr.Header().Get("Location"))
 	}
 	if model.GetSetting(db, RuntimeKitsuPasswordSettingKey) != "" {
@@ -70,7 +70,7 @@ func TestKitsuSetupValidatesAndStoresRuntimeCredentialsWithoutDiscord(t *testing
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rr := httptest.NewRecorder()
 	Handler("http://kitsu.invalid/", "", "", db, func() bool { return false }, nil)(rr, req)
-	if rr.Code != http.StatusSeeOther || !strings.Contains(rr.Header().Get("Location"), "/bot/admin/bot?edit=1") {
+	if rr.Code != http.StatusSeeOther || !strings.Contains(rr.Header().Get("Location"), "/bot/admin/bot/connections?edit=1") {
 		t.Fatalf("legacy human setup was not redirected safely: status=%d location=%q", rr.Code, rr.Header().Get("Location"))
 	}
 	if model.GetSetting(db, RuntimeKitsuPasswordSettingKey) != "" {
@@ -85,7 +85,7 @@ func TestKitsuSetupFailureDoesNotRenderBotFailureOrPersistCredential(t *testing.
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rr := httptest.NewRecorder()
 	Handler("http://kitsu.invalid/", "", "", db, func() bool { return false }, nil)(rr, req)
-	if rr.Code != http.StatusSeeOther || !strings.Contains(rr.Header().Get("Location"), "/bot/admin/bot?edit=1") {
+	if rr.Code != http.StatusSeeOther || !strings.Contains(rr.Header().Get("Location"), "/bot/admin/bot/connections?edit=1") {
 		t.Fatalf("legacy human setup was not redirected safely: status=%d location=%q", rr.Code, rr.Header().Get("Location"))
 	}
 	if model.GetSetting(db, RuntimeKitsuPasswordSettingKey) != "" {

@@ -1227,17 +1227,23 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .role-tray{border:1px dashed rgba(255,255,255,.18);border-radius:10px;padding:12px;margin-top:12px}
   .role-tray-head{font-size:13px;font-weight:600;color:var(--muted-2);margin-bottom:10px}
   .role-summary-line{font-size:12.5px;color:var(--muted);margin-top:8px}
-  .route-row{display:flex;align-items:flex-start;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
+  .route-item{border-bottom:1px solid var(--line)}
+  .route-item.is-editing{background:rgba(255,255,255,.025);border:1px solid var(--line);border-radius:8px;padding:0 12px;margin:4px 0}
+  .route-row{display:flex;align-items:flex-start;gap:12px;padding:10px 0}
   .route-row .route-src{width:170px;flex:none;font-size:13.5px;padding-top:3px}
+  .route-row-actions{flex:none;margin-left:auto}
   .route-chips{flex:1;display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-height:26px;min-width:0}
   .route-chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 4px 0 10px;border:1px solid var(--line);border-radius:13px;background:rgba(255,255,255,.03);font-size:12.5px}
   .route-chip button{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;padding:0 3px;font-family:inherit}
   .route-chip-static{padding:0 10px;color:var(--muted-2)}
   .route-none-label{color:var(--muted);font-size:13px}
-  .route-editor{padding:4px 0 12px 182px}
+  .route-editor{padding:8px 0 14px 182px;border-top:1px dashed rgba(255,255,255,.08)}
+  .route-mode-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .route-mode-label,.route-add-label{font-size:12.5px;color:var(--muted)}
+  .route-targets-editor{margin-top:10px}
   .route-add-line{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
   .route-add-line select{width:260px;max-width:100%}
-  .route-none-toggle{margin-top:10px}
+  .route-source-adder{margin-top:16px;padding-top:14px;border-top:1px dashed var(--line)}
   .audit-filter-form{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:16px 0 4px}
   .audit-filter-form .lbl{font-size:12.5px;color:var(--muted)}
   .audit-filter-form .right{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -1255,7 +1261,7 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .handoff-override-row .inh{flex:1;font-size:12.5px;color:var(--muted);min-width:120px}
   .handoff-override-row .inh.is-override{color:var(--accent-2);font-weight:600}
   .handoff-override-editor{padding:4px 0 12px 162px}
-  .route-row[hidden],.route-editor[hidden],.editorial-workbench .btn[hidden],.editorial-workbench .btn-ghost[hidden]{display:none}
+  .route-item[hidden],.route-row[hidden],.route-editor[hidden],.route-targets-editor[hidden],.editorial-workbench .btn[hidden],.editorial-workbench .btn-ghost[hidden]{display:none}
   .editorial-workbench .connection-external-url-controls .btn,.editorial-workbench .connection-external-url-controls .btn-ghost{flex:0 0 auto;width:auto;white-space:nowrap}
   .system-status-sections .system-observability-grid{margin-top:var(--system-status-heading-to-content)}
   @media(max-width:760px){.role-boxes{grid-template-columns:1fr}.route-row{flex-direction:column;gap:6px}.route-row .route-src{width:auto}.route-editor{padding-left:0}.handoff-override-editor{padding-left:0}.conn-kvrow{flex-direction:column;align-items:flex-start}.conn-kvrow .v{text-align:left}}

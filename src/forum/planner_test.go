@@ -615,3 +615,30 @@ func TestPlannerShotTitleUsesSequenceName(t *testing.T) {
 		t.Errorf("entity kind = %q", input.EntityKind)
 	}
 }
+
+func TestPlannerManualStatusRoleOverridesDictionary(t *testing.T) {
+	db := newForumDB(t)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	settings := testSettings()
+	settings.StatusRoles = append(settings.StatusRoles, model.ProductionForumStatusRole{
+		ProductionID: "prod-1",
+		StatusID:     "s-rejected",
+		StatusName:   "Rejected",
+		Role:         model.ForumRoleRetake,
+	})
+	planner := Planner{
+		DB:         db,
+		Production: "prod-1",
+		Settings:   settings,
+		Policies: map[string]model.StudioStatusPolicy{
+			"s-rejected": {StatusID: "s-rejected", StatusName: "Rejected", Nature: model.StatusNatureAmbiguous, Manual: false},
+		},
+		Now: now,
+	}
+	if got := planner.NatureForStatus("s-rejected"); got != model.StatusNatureRetake {
+		t.Fatalf("NatureForStatus = %q, want %q", got, model.StatusNatureRetake)
+	}
+	if got := planner.RoleForStatus("s-rejected"); got != model.ForumRoleRetake {
+		t.Fatalf("RoleForStatus = %q, want %q", got, model.ForumRoleRetake)
+	}
+}

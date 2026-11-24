@@ -37,7 +37,7 @@ func TestStatusRolesSectionPreFillsTemplate(t *testing.T) {
 	}
 	r := httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang=en", nil)
 	body := renderStatusRolesSection(db, "en", r)
-	if !strings.Contains(body, "Kitsu status → role") {
+	if !strings.Contains(body, "Task statuses") {
 		t.Fatalf("section missing: %s", body)
 	}
 	if !strings.Contains(body, `name="srole_project" value="p1"`) {
@@ -113,7 +113,7 @@ func TestStatusRolesDisplayOmitsProductionHeadingAndSummaryLine(t *testing.T) {
 	}
 	r := httptest.NewRequest(http.MethodGet, "/bot/admin/bot?lang=en", nil)
 	body := renderStatusRolesDisplay(db, "en", r)
-	for _, want := range []string{"Kitsu status → role", `class="role-boxes"`, `class="role-chip role-chip-static"`, "Waiting For Approval"} {
+	for _, want := range []string{"Task statuses", `class="role-boxes"`, `class="role-chip role-chip-static"`, "Waiting For Approval"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("display section missing %q: %s", want, body)
 		}
@@ -122,5 +122,20 @@ func TestStatusRolesDisplayOmitsProductionHeadingAndSummaryLine(t *testing.T) {
 		if strings.Contains(body, gone) {
 			t.Fatalf("display section must omit %q: %s", gone, body)
 		}
+	}
+}
+
+func TestBotHubHasNoEditFormsAndLinksToSubpages(t *testing.T) {
+	db := newSetupStateTestDB(t)
+	w := httptest.NewRecorder()
+	BotHandler(db, nil)(w, httptest.NewRequest(http.MethodGet, "/bot/admin/bot?lang=ja", nil))
+	body := w.Body.String()
+	for _, want := range []string{`data-bot-hub`, `/bot/admin/bot/connections`, `/bot/admin/bot/statuses`, `/bot/admin/bot/wiring`, "接続設定", "タスクステータス", "受け渡しの配線"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("hub missing %q", want)
+		}
+	}
+	if strings.Contains(body, "<form") {
+		t.Fatalf("hub must not contain edit forms")
 	}
 }

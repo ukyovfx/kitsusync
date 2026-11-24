@@ -167,5 +167,61 @@ func TestProductionTeamHasNoPerMemberLinkingControls(t *testing.T) {
 				t.Fatalf("%s: Team tab still has a per-member linking control %q: %s", name, forbidden, body)
 			}
 		}
+		if name == "guild read ok" && !strings.Contains(body, `<select name="team_discord_user_id"`) {
+			t.Fatalf("Team tab missing in-place Discord user dropdown: %s", body)
+		}
+	}
+}
+
+func TestTeamTabInPlaceLinkingAndUnlinking(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "team-inplace-prod", Name: "Team InPlace", DiscordGuildID: "11111111111111111"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	oldTeamReader, oldDirReader := reviewerProductionTeamReader, globalDiscordDirectoryReader
+	t.Cleanup(func() {
+		reviewerProductionTeamReader = oldTeamReader
+		globalDiscordDirectoryReader = oldDirReader
+	})
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
+		return []kitsu.Person{{ID: "p-1", FullName: "Alice", Email: "alice@example.invalid", Active: true}}, nil
+	}
+	globalDiscordDirectoryReader = func(_, guildID string) (globalDiscordDirectory, error) {
+		g := DiscordGuild{ID: guildID, Name: "Studio"}
+		return globalDiscordDirectory{Guilds: []DiscordGuild{g}, SelectedGuild: g, Options: []globalDiscordUserOption{{ID: "22222222222222222", Name: "@alice"}}}, nil
+	}
+	form := url.Values{
+		"action":               {"save_team_links"},
+		"project_id":           {project.KitsuProjectID},
+		"discord_guild_id":     {project.DiscordGuildID},
+		"team_kitsu_id":        {"p-1"},
+		"team_discord_user_id": {"22222222222222222"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/bot/admin/projects?project=team-inplace-prod&tab=team", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	AdminProjectsHandler(db, project.DiscordGuildID, "bot-token")(rr, req)
+	if rr.Code != http.StatusSeeOther || !strings.Contains(rr.Header().Get("Location"), "msg=saved") {
+		t.Fatalf("team link save failed: status=%d loc=%q", rr.Code, rr.Header().Get("Location"))
+	}
+	if maps := model.ListUserMap(db); len(maps) != 1 || maps[0].DiscordID != "22222222222222222" {
+		t.Fatalf("unexpected user maps after save: %+v", maps)
+	}
+	unlink := url.Values{
+		"action":               {"save_team_links"},
+		"project_id":           {project.KitsuProjectID},
+		"discord_guild_id":     {project.DiscordGuildID},
+		"unlink_team_kitsu_id": {"p-1"},
+	}
+	req2 := httptest.NewRequest(http.MethodPost, "/bot/admin/projects?project=team-inplace-prod&tab=team", strings.NewReader(unlink.Encode()))
+	req2.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr2 := httptest.NewRecorder()
+	AdminProjectsHandler(db, project.DiscordGuildID, "bot-token")(rr2, req2)
+	if rr2.Code != http.StatusSeeOther || !strings.Contains(rr2.Header().Get("Location"), "msg=saved") {
+		t.Fatalf("team unlink failed: status=%d loc=%q", rr2.Code, rr2.Header().Get("Location"))
+	}
+	if maps := model.ListUserMap(db); len(maps) != 1 || maps[0].DiscordID != "" {
+		t.Fatalf("expected cleared discord_id after unlink: %+v", maps)
 	}
 }

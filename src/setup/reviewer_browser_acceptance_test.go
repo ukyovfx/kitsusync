@@ -340,7 +340,11 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	})))
 	mux.HandleFunc("/bot/admin", RequireSession(AdminIndexWithRuntime(db, ready)))
 	mux.HandleFunc("/bot/admin/users", RequireSession(ReadOnlyAuditRoute(ready, UsersHandler(db, kitsuFixture.URL))))
-	mux.Handle("/bot/admin/bot", RequireSession(BotHandlerWithRuntime(db, nil, func() bool { return true })))
+	botHandler := RequireSession(BotHandlerWithRuntime(db, nil, func() bool { return true }))
+	mux.Handle("/bot/admin/bot", botHandler)
+	mux.Handle("/bot/admin/bot/connections", botHandler)
+	mux.Handle("/bot/admin/bot/statuses", botHandler)
+	mux.Handle("/bot/admin/bot/wiring", botHandler)
 	mux.HandleFunc("/bot/admin/projects", RequireSession(ReadOnlyAuditRoute(ready, AdminProjectsHandler(db, reviewerBrowserGuild, reviewerBrowserBot))))
 	mux.HandleFunc("/bot/admin/audit", RequireSession(AuditLogHandler(db)))
 	mux.HandleFunc("/bot/admin/forum", RequireSession(ForumSettingsHandler(db, func() (string, string) {

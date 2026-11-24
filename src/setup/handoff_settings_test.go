@@ -112,7 +112,7 @@ func TestStudioRoutesSectionRendersOnConnectionSettings(t *testing.T) {
 	stubHandoffTaskTypes(t, handoffTaskTypes())
 	db := newForumPageDB(t)
 	body := studioRoutesSection(t, db)
-	for _, want := range []string{"Handoff wiring (studio default)", `name="action" value="save_studio_routes"`, `name="st_notify_tt-lay"`, `name="st_none_tt-comp"`, `class="route-row"`, `data-route-row="tt-lay"`, "Add a source", `data-route-source-select`, `data-route-source-add`} {
+	for _, want := range []string{"Handoff wiring", `name="action" value="save_studio_routes"`, `name="st_notify_tt-lay"`, `name="st_none_tt-comp"`, `class="route-row"`, `data-route-row="tt-lay"`, "Add source task type", `data-route-source-select`, `data-route-source-add`, `data-route-mode="wired"`, `data-route-mode="none"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("studio section is missing %q", want)
 		}
@@ -310,5 +310,49 @@ func TestHandoffNotificationsTabLinksTheHandoffPage(t *testing.T) {
 	body := renderSelectedProductionPanel(db, r, model.Project{KitsuProjectID: "p1", Name: "Synthetic Production", DiscordGuildID: "g1"}, "en", "notifications", "", "", "")
 	if !strings.Contains(body, "/bot/admin/handoff?") || !strings.Contains(body, "project=p1") {
 		t.Fatalf("the notifications tab must link to the handoff mapping page: %s", body)
+	}
+}
+
+func TestHandoffFallbackDefaultsToDisabledAndRendersMemberDropdown(t *testing.T) {
+	stubHandoffTaskTypes(t, handoffTaskTypes())
+	db := newForumPageDB(t)
+	project := model.FindProjectByKitsuID(db, "p1")
+	project.DiscordGuildID = "11111111111111111"
+	if err := db.Save(project).Error; err != nil {
+		t.Fatal(err)
+	}
+	guildMemberListCache.invalidate("11111111111111111")
+	oldMembers := reviewerGuildMembersForGuild
+	t.Cleanup(func() { reviewerGuildMembersForGuild = oldMembers })
+	reviewerGuildMembersForGuild = func(string, string) ([]DiscordGuildMember, error) {
+		var m DiscordGuildMember
+		m.User.ID = "22222222222222222"
+		m.User.Username = "alice"
+		return []DiscordGuildMember{m}, nil
+	}
+	if err := setRuntimeDiscordBotToken(db, "bot-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.SaveProductionHandoffSettings(db, model.ProductionHandoffSettings{
+		Config: model.ProductionHandoffConfig{
+			ProductionID:   "p1",
+			NoAssignee:     model.HandoffFallbackUsers,
+			FallbackUserID: "99999999999999999",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/bot/admin/handoff?project=p1&lang=ja", nil)
+	w := httptest.NewRecorder()
+	HandoffSettingsHandler(db)(w, r)
+	body := w.Body.String()
+	if !strings.Contains(body, `<select id="handoff-fallback-user" name="fallback_user">`) {
+		t.Fatalf("expected member dropdown for fallback_user: %s", body)
+	}
+	if !strings.Contains(body, `<option value="22222222222222222">`) || !strings.Contains(body, `<option value="99999999999999999" selected>99999999999999999</option>`) {
+		t.Fatalf("expected guild member and preserved raw fallback ID in dropdown: %s", body)
+	}
+	if strings.Contains(body, `<input id="handoff-fallback-user"`) {
+		t.Fatalf("fallback_user must not be a raw text input")
 	}
 }

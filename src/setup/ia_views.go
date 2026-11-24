@@ -29,7 +29,7 @@ func iaNav(lang string, r *http.Request) string {
 	}
 	var b strings.Builder
 	for _, item := range items {
-		active := r != nil && r.URL != nil && r.URL.Path == item.path
+		active := r != nil && r.URL != nil && (r.URL.Path == item.path || (item.path == "/bot/admin/bot" && strings.HasPrefix(r.URL.Path, "/bot/admin/bot/")))
 		className := "nav-chip"
 		current := ""
 		if active {
@@ -879,18 +879,40 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 	}
 	guildMemberNames := make(map[string]string, len(guildMembers))
 	guildMemberIDs := make(map[string]bool, len(guildMembers))
+	var selectableMembers []DiscordGuildMember
 	for _, member := range guildMembers {
 		if id := strings.TrimSpace(member.User.ID); isDiscordSnowflake(id) {
 			if !member.User.Bot {
 				guildMemberIDs[id] = true
 				guildMemberNames[id] = discordGuildMemberDisplayName(member)
+				selectableMembers = append(selectableMembers, member)
 			}
 		}
 	}
+	editable := !p.ValidationOnly && !p.ReadOnlyPreview && teamErr == nil && guildReadOK && len(selectableMembers) > 0
 	supervisorSummaries := productionSupervisorTaskTypeSummaries(team, taskTypes)
 	departmentNames := productionDepartmentNames(taskTypes)
 
 	userText := func(ja, en string) string { return t(lang, ja, en) }
+	memberSelect := func(person kitsu.Person, currentID string) string {
+		var b strings.Builder
+		b.WriteString(`<input type="hidden" name="team_kitsu_id" value="` + esc(strings.TrimSpace(person.ID)) + `">`)
+		b.WriteString(`<select name="team_discord_user_id" aria-label="` + esc(kitsuPersonDisplayName(person)+" - Discord") + `">`)
+		b.WriteString(`<option value="">` + esc(userText("未設定（紐づけ解除）", "Not linked")) + `</option>`)
+		if currentID != "" && !guildMemberIDs[currentID] {
+			b.WriteString(`<option value="` + esc(currentID) + `" selected disabled>` + esc(userText("このサーバーで見つかりません", "Unavailable in this server")) + `</option>`)
+		}
+		for _, member := range selectableMembers {
+			id := strings.TrimSpace(member.User.ID)
+			selected := ""
+			if id == currentID {
+				selected = " selected"
+			}
+			b.WriteString(`<option value="` + esc(id) + `"` + selected + `>` + esc(discordGuildMemberDisplayName(member)) + `</option>`)
+		}
+		b.WriteString(`</select>`)
+		return b.String()
+	}
 	var members strings.Builder
 	if teamErr != nil {
 		members.WriteString(`<tr><td colspan="5"><div class="empty-state" role="status"><strong>` + esc(userText("Kitsuのプロダクションチームを読み込めませんでした", "Could not load the Kitsu Production Team")) + `</strong><span class="field-help">` + esc(userText("Kitsu接続を確認してから再読み込みしてください。", "Check the Kitsu connection and reload this page.")) + `</span></div></td></tr>`)
@@ -918,16 +940,19 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 			}
 			discordCell := `<span class="field-help">—</span>`
 			statusCell := `<span class="status-pill warning" role="status">` + esc(userText("要確認", "Needs review")) + `</span>`
+			currentDiscordID := ""
 			if guildMembersPending {
 				discordCell += `<span class="field-help">` + esc(userText("Discord所属を取得中", "Guild membership is loading")) + `</span>`
 			} else if !guildReadOK {
 				discordCell += `<span class="field-help">` + esc(userText("Discord所属を確認できません", "Guild membership could not be verified")) + `</span>`
 			}
-			if user := globalUserForKitsuPerson(globalUsers, person); user != nil && isDiscordSnowflake(user.DiscordID) {
-				if !guildReadOK || !guildMemberIDs[strings.TrimSpace(user.DiscordID)] {
+			user := globalUserForKitsuPerson(globalUsers, person)
+			if user != nil && isDiscordSnowflake(user.DiscordID) {
+				currentDiscordID = strings.TrimSpace(user.DiscordID)
+				if !guildReadOK || !guildMemberIDs[currentDiscordID] {
 					discordCell = `<span class="field-help">` + esc(userText("Discord所属が要確認", "Discord membership needs review")) + `</span>`
 				} else {
-					discordName := guildMemberNames[strings.TrimSpace(user.DiscordID)]
+					discordName := guildMemberNames[currentDiscordID]
 					if discordName == "" {
 						discordName = discordReviewerDisplayName(user.DiscordDisplayName)
 					}
@@ -936,6 +961,12 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 					}
 					discordCell = `<span class="production-team-discord-name" title="` + esc(discordName) + `">` + esc(discordName) + `</span>`
 					statusCell = `<span class="status-pill success" role="status">` + esc(userText("リンク済み", "Linked")) + `</span>`
+				}
+			}
+			if editable {
+				discordCell = memberSelect(person, currentDiscordID)
+				if currentDiscordID != "" {
+					statusCell += ` <button type="submit" name="unlink_team_kitsu_id" value="` + esc(strings.TrimSpace(person.ID)) + `" class="btn-ghost sm">` + esc(userText("解除", "Unlink")) + `</button>`
 				}
 			}
 			scopeMarkup := ""
@@ -948,7 +979,16 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 			members.WriteString(`<tr><td colspan="5"><div class="empty-state" role="status"><strong>` + esc(userText("Kitsuのプロダクションチームは空です", "The Kitsu Production Team is empty")) + `</strong></div></td></tr>`)
 		}
 	}
-	return `<section id="production-team" class="production-team-page"><h2>` + esc(userText("チーム", "Team")) + `</h2><p class="field-help">` + esc(userText("メンバーとロールはKitsuから読み取り専用で表示します。Supervisor範囲はDepartmentとProductionのTask Typeから導出され、実際のタスク割り当てを示すものではありません。Discordとの紐づけは右上の「ユーザー紐づけ」で行います。", "Members and roles are read-only from Kitsu. Supervisor scope is derived from Departments and this Production's Task Types; it does not indicate actual task assignments. Discord linking is done from User Linking at the top right.")) + `</p>` + guildNoticeMarkup(guildNotice) + `<div class="table-wrap production-team-table-wrap"><table class="production-team-table"><colgroup><col class="production-team-col-member"><col class="production-team-col-role"><col class="production-team-col-department"><col class="production-team-col-discord"><col class="production-team-col-status"></colgroup><thead><tr><th scope="col">` + esc(userText("メンバー", "Member")) + `</th><th scope="col">` + esc(userText("Kitsuロール", "Kitsu role")) + `</th><th scope="col">Department</th><th scope="col">Discord</th><th scope="col">` + esc(userText("状態", "Status")) + `</th></tr></thead><tbody>` + members.String() + `</tbody></table></div></section>`
+	tableHTML := `<div class="table-wrap production-team-table-wrap"><table class="production-team-table"><colgroup><col class="production-team-col-member"><col class="production-team-col-role"><col class="production-team-col-department"><col class="production-team-col-discord"><col class="production-team-col-status"></colgroup><thead><tr><th scope="col">` + esc(userText("メンバー", "Member")) + `</th><th scope="col">` + esc(userText("Kitsuロール", "Kitsu role")) + `</th><th scope="col">Department</th><th scope="col">Discord</th><th scope="col">` + esc(userText("状態", "Status")) + `</th></tr></thead><tbody>` + members.String() + `</tbody></table></div>`
+	if editable && members.Len() > 0 {
+		tableHTML = `<form method="POST" action="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=team", r)) + `" data-team-link-form>` +
+			`<input type="hidden" name="action" value="save_team_links">` +
+			`<input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `">` +
+			`<input type="hidden" name="discord_guild_id" value="` + esc(p.DiscordGuildID) + `">` +
+			tableHTML +
+			`<div class="button-row"><button type="submit" class="btn">` + esc(userText("変更を保存", "Save changes")) + `</button></div></form>`
+	}
+	return `<section id="production-team" class="production-team-page"><h2>` + esc(userText("チーム", "Team")) + `</h2><p class="field-help">` + esc(userText("メンバーとロールはKitsuから読み取り専用で表示します。Supervisor範囲はDepartmentとProductionのTask Typeから導出され、実際のタスク割り当てを示すものではありません。この場でDiscordユーザーとの紐づけや解除を保存できます。", "Members and roles are read-only from Kitsu. Supervisor scope is derived from Departments and this Production's Task Types; it does not indicate actual task assignments. You can link or unlink Discord users here.")) + `</p>` + guildNoticeMarkup(guildNotice) + tableHTML + `</section>`
 }
 
 func productionDepartmentNames(taskTypes []kitsu.TaskType) map[string]string {
@@ -1747,11 +1787,9 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB, pollInt
 	if issues != "" {
 		issuesSection = `<section class="section-card glass system-issues" aria-labelledby="system-issues-title"><div class="page-heading"><div><h2 id="system-issues-title">` + esc(t(lang, "最近のシステム問題", "Recent system issues")) + `</h2><p class="hint">` + esc(t(lang, "直近の失敗と復旧記録を表示します。", "Recent failure and recovery records.")) + `</p></div></div>` + issues + `</section>`
 	}
-	visibilitySection := renderProductionVisibilitySection(lang, r, db)
 	livenessSection := renderLivenessSection(lang, stats, pollInterval)
 	handoffSection := renderHandoffAttentionSection(lang, db)
-	exceptionsSection := renderAdminExceptionsSection(lang, db)
-	body := `<div class="section-stack"><section class="section-card glass pipeline-health" aria-labelledby="pipeline-health-title"><div class="page-heading"><div><h2 id="pipeline-health-title">` + esc(t(lang, "通知パイプラインの状態", "Notification pipeline health")) + `</h2><p class="hint">` + esc(t(lang, "通知に関わる各段階の状態を確認できます。取得できないメトリクスは未確認として表示します。", "Review each notification stage. Metrics that are not available are shown as unconfirmed.")) + `</p></div><span class="status-pill ` + esc(readinessView.Class) + `" role="status">` + esc(readinessView.Label) + `</span></div><div class="pipeline-health-grid">` + healthRows.String() + `</div></section>` + livenessSection + handoffSection + exceptionsSection + issuesSection + visibilitySection + `</div>`
+	body := `<div class="section-stack"><section class="section-card glass pipeline-health" aria-labelledby="pipeline-health-title"><div class="page-heading"><div><h2 id="pipeline-health-title">` + esc(t(lang, "通知パイプラインの状態", "Notification pipeline health")) + `</h2><p class="hint">` + esc(t(lang, "通知に関わる各段階の状態を確認できます。取得できないメトリクスは未確認として表示します。", "Review each notification stage. Metrics that are not available are shown as unconfirmed.")) + `</p></div><span class="status-pill ` + esc(readinessView.Class) + `" role="status">` + esc(readinessView.Label) + `</span></div><div class="pipeline-health-grid">` + healthRows.String() + `</div></section>` + livenessSection + handoffSection + issuesSection + `</div>`
 	body = renderRuntimeObservabilitySummary(lang, stats, readiness, windowName, body)
 	if card := currentProblemCard(lang, items); card != "" {
 		body = strings.Replace(body, `<div class="section-stack system-status-sections">`, `<div class="section-stack system-status-sections">`+card, 1)
@@ -1760,49 +1798,6 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB, pollInt
 	body = replaceSystemStatusRefreshScript(body)
 	body = stripSystemStatusRedundantCopy(body)
 	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.system_status"), r, body))
-}
-
-// renderProductionVisibilitySection renders the per-production polling
-// visibility table: whether the bot still sees each production, how many
-// tasks it observed, and when the last successful poll ran. Productions with
-// no visible tasks or no successful poll yet are marked as warnings.
-func renderProductionVisibilitySection(lang string, r *http.Request, db *gorm.DB) string {
-	projects := model.ListProjects(db)
-	stats := Stats.ProductionPollStats()
-	rows := make([]string, 0, len(projects))
-	warnCount := 0
-	for _, project := range projects {
-		name := project.Name
-		if strings.TrimSpace(name) == "" {
-			name = project.KitsuProjectID
-		}
-		stat, polled := stats[project.KitsuProjectID]
-		visible := polled && stat.TaskCount > 0
-		pillClass, pillLabel := "bad", t(lang, "見えていません", "Not visible")
-		if !polled {
-			pillClass, pillLabel = "warning", t(lang, "未実行", "Never polled")
-		} else if visible {
-			pillClass, pillLabel = "ok", t(lang, "正常", "Visible")
-		} else {
-			warnCount++
-		}
-		lastPoll := t(lang, "未実行", "never")
-		if polled && !stat.LastSuccessAt.IsZero() {
-			ago := time.Since(stat.LastSuccessAt).Round(time.Second)
-			lastPoll = ago.String() + " " + t(lang, "前", "ago")
-		}
-		taskCount := "—"
-		if polled {
-			taskCount = strconv.Itoa(stat.TaskCount)
-		}
-		rows = append(rows, fmt.Sprintf(`<tr><th scope="row" class="mobile-card-lead"><span class="mobile-card-lead-label" data-label="%s">%s</span></th><td data-label="%s"><span class="status-pill %s" role="status">%s</span></td><td data-label="%s">%s</td><td data-label="%s">%s</td></tr>`,
-			esc(t(lang, "プロダクション", "Production")), esc(name), esc(t(lang, "Bot から見えているか", "Visible to bot")), esc(pillClass), esc(pillLabel), esc(t(lang, "タスク件数", "Task count")), esc(taskCount), esc(t(lang, "最終ポーリング成功", "Last polling success")), esc(lastPoll)))
-	}
-	if len(rows) == 0 {
-		return ""
-	}
-	table := `<table class="data-table mobile-card-table" aria-label="` + esc(t(lang, "プロダクションごとのポーリング可視性", "Per-production polling visibility")) + `"><thead><tr><th scope="col">` + esc(t(lang, "プロダクション", "Production")) + `</th><th scope="col">` + esc(t(lang, "Bot から見えているか", "Visible to bot")) + `</th><th scope="col">` + esc(t(lang, "タスク件数", "Task count")) + `</th><th scope="col">` + esc(t(lang, "最終ポーリング成功", "Last polling success")) + `</th></tr></thead><tbody>` + strings.Join(rows, "") + `</tbody></table>`
-	return `<section class="section-card glass production-visibility" aria-labelledby="production-visibility-title"><div class="page-heading"><div><h2 id="production-visibility-title">` + esc(t(lang, "プロダクションごとの可視性", "Per-production visibility")) + `</h2><p class="hint">` + esc(t(lang, "Bot が各プロダクションのタスクを取得できているかを表示します。0 件が続くプロダクションは警告になります。", "Shows whether the bot still observes tasks for each production. Productions with zero tasks are marked as warnings.")) + `</p></div>` + map[bool]string{true: `<span class="status-pill bad">` + esc(fmt.Sprint(warnCount)) + `</span>`, false: ""}[warnCount > 0] + `</div>` + table + `</section>`
 }
 
 func renderRuntimeObservabilitySummary(lang string, stats RuntimeSnapshot, readiness SharedBotRuntimeReadiness, windowName, body string) string {

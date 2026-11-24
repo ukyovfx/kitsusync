@@ -29,7 +29,7 @@ import (
 
 var handoffTaskTypeLister = setupKitsuTaskTypes
 
-var handoffFallbackOptions = []string{model.HandoffFallbackAdmin, model.HandoffFallbackUsers, model.HandoffFallbackDisabled}
+var handoffFallbackOptions = []string{model.HandoffFallbackDisabled, model.HandoffFallbackUsers, model.HandoffFallbackAdmin}
 
 func handoffFallbackLabel(lang, fallback string) string {
 	switch fallback {
@@ -415,33 +415,50 @@ func renderStudioRoutesSection(db *gorm.DB, lang string, r *http.Request) string
 			}
 			addOptions.WriteString(`<option value="` + esc(target.ID) + `">` + esc(target.Name) + `</option>`)
 		}
-		rows.WriteString(`<div class="route-row" data-route-row="` + esc(taskType.ID) + `"` + rowHidden + `>` +
+		modeWired := !state.none
+		wiredSegClass := " on"
+		noneSegClass := ""
+		targetsEditorHidden := ""
+		if state.none {
+			wiredSegClass = ""
+			noneSegClass = " on"
+			targetsEditorHidden = " hidden"
+		}
+		rows.WriteString(`<div class="route-item" data-route-item="` + esc(taskType.ID) + `"` + rowHidden + `>` +
+			`<div class="route-row" data-route-row="` + esc(taskType.ID) + `">` +
 			`<span class="route-src">` + esc(taskType.Name) + `</span>` +
 			`<span class="route-chips" data-route-chips>` + routeChipsStatic(state, namesByID, lang) + `</span>` +
-			`<span><button type="button" class="btn-ghost" data-route-toggle>` + esc(t(lang, "変更", "Edit")) + `</button></span></div>`)
-		rows.WriteString(`<div class="route-editor" data-route-editor="` + esc(taskType.ID) + `" hidden>` +
-			`<div class="route-hidden-inputs" style="display:none">` + routeTargetCheckboxes("st_notify_", taskType.ID, taskTypes, state.selected) + `</div>` +
-			`<div class="route-add-line"><select data-route-add-select aria-label="` + esc(t(lang, "行き先を選ぶ", "Choose a destination")) + `">` + addOptions.String() + `</select>` +
-			`<button type="button" class="btn" data-route-add>` + esc(t(lang, "追加", "Add")) + `</button></div>` +
-			`<div class="route-none-toggle"><label class="checkbox-label"><input type="checkbox" data-route-none name="st_none_` + esc(taskType.ID) + `" value="1"` + noneChecked + `> ` + esc(t(lang, "受け渡しなし", "No handoff")) + `</label></div></div>`)
+			`<span class="route-row-actions"><button type="button" class="btn-ghost" data-route-toggle>` + esc(t(lang, "変更", "Edit")) + `</button></span></div>` +
+			`<div class="route-editor" data-route-editor="` + esc(taskType.ID) + `" hidden>` +
+			`<div class="route-hidden-inputs" style="display:none">` + routeTargetCheckboxes("st_notify_", taskType.ID, taskTypes, state.selected) +
+			`<input type="checkbox" data-route-none name="st_none_` + esc(taskType.ID) + `" value="1"` + noneChecked + `></div>` +
+			`<div class="route-mode-row"><span class="route-mode-label">` + esc(t(lang, "受け渡しの状態", "Handoff mode")) + `</span>` +
+			`<div class="seg" role="group" aria-label="` + esc(t(lang, "受け渡しの状態", "Handoff mode")) + `">` +
+			`<button type="button" class="` + strings.TrimSpace(wiredSegClass) + `" data-route-mode="wired" aria-pressed="` + esc(fmt.Sprint(modeWired)) + `">` + esc(t(lang, "配線あり", "Wired")) + `</button>` +
+			`<button type="button" class="` + strings.TrimSpace(noneSegClass) + `" data-route-mode="none" aria-pressed="` + esc(fmt.Sprint(state.none)) + `">` + esc(t(lang, "受け渡しなし", "No handoff")) + `</button>` +
+			`</div></div>` +
+			`<div class="route-targets-editor" data-route-targets-editor` + targetsEditorHidden + `>` +
+			`<div class="route-add-line"><span class="route-add-label">` + esc(t(lang, "行き先を追加", "Add destination")) + `</span><select data-route-add-select aria-label="` + esc(t(lang, "行き先を選ぶ", "Choose a destination")) + `">` + addOptions.String() + `</select>` +
+			`<button type="button" class="btn sm" data-route-add>` + esc(t(lang, "追加", "Add")) + `</button></div></div>` +
+			`</div></div>`)
 	}
-	addSource := `<div class="route-add-line"><span class="route-src">` + esc(t(lang, "起点を追加", "Add a source")) + `</span>` +
-		`<select data-route-source-select aria-label="` + esc(t(lang, "起点を選ぶ", "Choose a source")) + `"><option value="">` + esc(t(lang, "起点を選ぶ", "Choose a source")) + `</option>` + sourceOptions.String() + `</select>` +
-		`<button type="button" class="btn" data-route-source-add>` + esc(t(lang, "追加", "Add")) + `</button></div>`
-	return `<form method="post" action="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `" class="section-stack" data-route-editor-root data-none-label="` + esc(t(lang, "受け渡しなし", "No handoff")) + `" data-no-wiring-label="` + esc(t(lang, "配線なし", "No wiring")) + `" data-edit-label="` + esc(t(lang, "変更", "Edit")) + `" data-close-label="` + esc(t(lang, "閉じる", "Close")) + `">` +
+	addSource := `<div class="route-source-adder"><span class="route-add-label">` + esc(t(lang, "新しい起点タスクタイプを追加", "Add source task type")) + `</span>` +
+		`<div class="route-add-line"><select data-route-source-select aria-label="` + esc(t(lang, "起点を選ぶ", "Choose a source")) + `"><option value="">` + esc(t(lang, "起点を選ぶ", "Choose a source")) + `</option>` + sourceOptions.String() + `</select>` +
+		`<button type="button" class="btn" data-route-source-add>` + esc(t(lang, "追加", "Add")) + `</button></div></div>`
+	return `<form method="post" action="` + esc(withLang("/bot/admin/bot/wiring", r)) + `" class="section-stack" data-route-editor-root data-none-label="` + esc(t(lang, "受け渡しなし", "No handoff")) + `" data-no-wiring-label="` + esc(t(lang, "配線なし", "No wiring")) + `" data-edit-label="` + esc(t(lang, "変更", "Edit")) + `" data-close-label="` + esc(t(lang, "閉じる", "Close")) + `">` +
 		`<input type="hidden" name="action" value="save_studio_routes">` +
-		`<section class="flat-section" id="studio-routes"><div class="flat-section-head"><h2>` + esc(t(lang, "受け渡しの配線（スタジオ共通）", "Handoff wiring (studio default)")) + `</h2></div>` +
+		`<section class="flat-section" id="studio-routes"><div class="flat-section-head"><h2>` + esc(t(lang, "受け渡しの配線", "Handoff wiring")) + `</h2></div>` +
 		`<p class="field-help">` + esc(t(lang, "タスクが完了したとき、同じショット/アセットの次工程へ「進めていい」と伝える配線です。", "Wiring that tells the next task types on the same shot or asset they may proceed when a task finishes.")) + `</p>` +
 		rows.String() + addSource +
-		`<div class="button-row"><button type="submit" class="btn">` + esc(t(lang, "保存", "Save")) + `</button><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "キャンセル", "Cancel")) + `</a></div></section></form>` + studioRoutesEditorScript
+		`<div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "接続設定トップへ戻る", "Back to Connections hub")) + `</a><button type="submit" class="btn">` + esc(t(lang, "保存", "Save")) + `</button></div></section></form>` + studioRoutesEditorScript
 }
 
 // studioRoutesEditorScript drives the wiring editor's chips: the hidden
 // checkboxes stay the single source of truth, and the chips, the add
-// select and the no-handoff toggle mirror them. Checking 「受け渡しなし」
-// clears the row's targets and checking any target clears it, so the two
-// states are never submitted together.
-const studioRoutesEditorScript = `<script data-studio-routes-editor>(function(){var root=document.querySelector("[data-route-editor-root]");if(!root)return;var noneLabel=root.getAttribute("data-none-label")||"受け渡しなし",noWiringLabel=root.getAttribute("data-no-wiring-label")||"配線なし",editLabel=root.getAttribute("data-edit-label")||"変更",closeLabel=root.getAttribute("data-close-label")||"閉じる";function rebuild(row,editor){var chips=row.querySelector("[data-route-chips]");var boxes=editor.querySelectorAll("input[type=checkbox][name^=\"st_notify_\"]");var none=editor.querySelector("[data-route-none]");var select=editor.querySelector("[data-route-add-select]");var checked=[];boxes.forEach(function(box){if(box.checked){checked.push(box)}});chips.innerHTML="";if(none&&none.checked){var mark=document.createElement("span");mark.className="route-chip route-chip-static";mark.textContent=noneLabel;chips.appendChild(mark)}else if(checked.length===0){var empty=document.createElement("span");empty.className="route-none-label";empty.textContent=noWiringLabel;chips.appendChild(empty)}else{checked.forEach(function(box){var chip=document.createElement("span");chip.className="route-chip";chip.textContent=box.getAttribute("data-route-name")||box.value;var remove=document.createElement("button");remove.type="button";remove.textContent="×";remove.setAttribute("aria-label",chip.textContent);remove.addEventListener("click",function(){box.checked=false;rebuild(row,editor)});chip.appendChild(remove);chips.appendChild(chip)})}if(select){var current=select.value;var first=select.querySelector("option[value=\"\"]");select.innerHTML="";if(first)select.appendChild(first);boxes.forEach(function(box){if(box.checked)return;var option=document.createElement("option");option.value=box.value;option.textContent=box.getAttribute("data-route-name")||box.value;select.appendChild(option)});select.value=current}}root.querySelectorAll("[data-route-row]").forEach(function(row){var id=row.getAttribute("data-route-row");var editor=root.querySelector("[data-route-editor=\""+id+"\"]");if(!editor)return;var toggle=row.querySelector("[data-route-toggle]");if(toggle){toggle.addEventListener("click",function(){editor.hidden=!editor.hidden;toggle.textContent=editor.hidden?editLabel:closeLabel})}var none=editor.querySelector("[data-route-none]");var boxes=editor.querySelectorAll("input[type=checkbox][name^=\"st_notify_\"]");if(none){none.addEventListener("change",function(){if(none.checked){boxes.forEach(function(box){box.checked=false})}rebuild(row,editor)})}var add=editor.querySelector("[data-route-add]");var select=editor.querySelector("[data-route-add-select]");if(add&&select){add.addEventListener("click",function(){var value=select.value;if(!value)return;boxes.forEach(function(box){if(box.value===value){box.checked=true}});if(none)none.checked=false;rebuild(row,editor)})}rebuild(row,editor)});var sourceSelect=root.querySelector("[data-route-source-select]");var sourceAdd=root.querySelector("[data-route-source-add]");if(sourceSelect&&sourceAdd){sourceAdd.addEventListener("click",function(){var id=sourceSelect.value;if(!id)return;var row=root.querySelector("[data-route-row=\""+id+"\"]");var editor=root.querySelector("[data-route-editor=\""+id+"\"]");if(row){row.hidden=false}if(editor){editor.hidden=false;var toggle=row&&row.querySelector("[data-route-toggle]");if(toggle)toggle.textContent=closeLabel}var option=sourceSelect.querySelector("option[value=\""+id+"\"]");if(option)option.remove();sourceSelect.value=""})}})();</script>`
+// select and the no-handoff segmented choice mirror them. Choosing
+// 「受け渡しなし」 clears the row's targets and hides the target editor;
+// choosing 「配線あり」 or adding a target clears the no-handoff state.
+const studioRoutesEditorScript = `<script data-studio-routes-editor>(function(){var root=document.querySelector("[data-route-editor-root]");if(!root)return;var noneLabel=root.getAttribute("data-none-label")||"受け渡しなし",noWiringLabel=root.getAttribute("data-no-wiring-label")||"配線なし",editLabel=root.getAttribute("data-edit-label")||"変更",closeLabel=root.getAttribute("data-close-label")||"閉じる";function rebuild(item){var row=item.querySelector("[data-route-row]");var editor=item.querySelector("[data-route-editor]");if(!row||!editor)return;var chips=row.querySelector("[data-route-chips]");var boxes=editor.querySelectorAll("input[type=checkbox][name^=\"st_notify_\"]");var none=editor.querySelector("[data-route-none]");var targetsEditor=editor.querySelector("[data-route-targets-editor]");var wiredBtn=editor.querySelector("[data-route-mode=\"wired\"]");var noneBtn=editor.querySelector("[data-route-mode=\"none\"]");var select=editor.querySelector("[data-route-add-select]");var checked=[];boxes.forEach(function(box){if(box.checked){checked.push(box)}});var isNone=!!(none&&none.checked);if(wiredBtn){wiredBtn.classList.toggle("on",!isNone);wiredBtn.setAttribute("aria-pressed",String(!isNone))}if(noneBtn){noneBtn.classList.toggle("on",isNone);noneBtn.setAttribute("aria-pressed",String(isNone))}if(targetsEditor){targetsEditor.hidden=isNone}chips.innerHTML="";if(isNone){var mark=document.createElement("span");mark.className="route-chip route-chip-static";mark.textContent=noneLabel;chips.appendChild(mark)}else if(checked.length===0){var empty=document.createElement("span");empty.className="route-none-label";empty.textContent=noWiringLabel;chips.appendChild(empty)}else{checked.forEach(function(box){var chip=document.createElement("span");chip.className="route-chip";chip.textContent=box.getAttribute("data-route-name")||box.value;var remove=document.createElement("button");remove.type="button";remove.textContent="×";remove.setAttribute("aria-label",chip.textContent);remove.addEventListener("click",function(){box.checked=false;rebuild(item)});chip.appendChild(remove);chips.appendChild(chip)})}if(select){var current=select.value;var first=select.querySelector("option[value=\"\"]");select.innerHTML="";if(first)select.appendChild(first);boxes.forEach(function(box){if(box.checked)return;var option=document.createElement("option");option.value=box.value;option.textContent=box.getAttribute("data-route-name")||box.value;select.appendChild(option)});select.value=current}}root.querySelectorAll("[data-route-item]").forEach(function(item){var row=item.querySelector("[data-route-row]");var editor=item.querySelector("[data-route-editor]");if(!row||!editor)return;var toggle=row.querySelector("[data-route-toggle]");if(toggle){toggle.addEventListener("click",function(){editor.hidden=!editor.hidden;item.classList.toggle("is-editing",!editor.hidden);toggle.textContent=editor.hidden?editLabel:closeLabel})}var none=editor.querySelector("[data-route-none]");var boxes=editor.querySelectorAll("input[type=checkbox][name^=\"st_notify_\"]");var wiredBtn=editor.querySelector("[data-route-mode=\"wired\"]");var noneBtn=editor.querySelector("[data-route-mode=\"none\"]");if(wiredBtn){wiredBtn.addEventListener("click",function(){if(none)none.checked=false;rebuild(item)})}if(noneBtn){noneBtn.addEventListener("click",function(){if(none)none.checked=true;boxes.forEach(function(box){box.checked=false});rebuild(item)})}var add=editor.querySelector("[data-route-add]");var select=editor.querySelector("[data-route-add-select]");if(add&&select){add.addEventListener("click",function(){var value=select.value;if(!value)return;boxes.forEach(function(box){if(box.value===value){box.checked=true}});if(none)none.checked=false;rebuild(item)})}rebuild(item)});var sourceSelect=root.querySelector("[data-route-source-select]");var sourceAdd=root.querySelector("[data-route-source-add]");if(sourceSelect&&sourceAdd){sourceAdd.addEventListener("click",function(){var id=sourceSelect.value;if(!id)return;var item=root.querySelector("[data-route-item=\""+id+"\"]");var editor=item&&item.querySelector("[data-route-editor]");var toggle=item&&item.querySelector("[data-route-toggle]");if(item){item.hidden=false;item.classList.add("is-editing")}if(editor){editor.hidden=false}if(toggle){toggle.textContent=closeLabel}var option=sourceSelect.querySelector("option[value=\""+id+"\"]");if(option)option.remove();sourceSelect.value=""})}})();</script>`
 
 // renderStudioRoutesDisplay is the read-only wiring list on the connection
 // page's normal mode: every source with its targets as chips.
@@ -456,7 +473,7 @@ func renderStudioRoutesDisplay(db *gorm.DB, lang string, r *http.Request) string
 	for _, state := range states {
 		rows.WriteString(`<div class="route-row"><span class="route-src">` + esc(state.taskType.Name) + `</span><span class="route-chips">` + routeChipsStatic(state, namesByID, lang) + `</span></div>`)
 	}
-	return `<section class="flat-section" aria-labelledby="studio-routes-display-title"><div class="flat-section-head"><h2 id="studio-routes-display-title">` + esc(t(lang, "受け渡しの配線（スタジオ共通）", "Handoff wiring (studio default)")) + `</h2><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `#studio-routes">` + esc(t(lang, "編集", "Edit")) + `</a></div>` +
+	return `<section class="flat-section" aria-labelledby="studio-routes-display-title"><div class="flat-section-head"><h2 id="studio-routes-display-title">` + esc(t(lang, "受け渡しの配線", "Handoff wiring")) + `</h2><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot/wiring", r)) + `">` + esc(t(lang, "編集", "Edit")) + `</a></div>` +
 		`<p class="field-help">` + esc(t(lang, "タスクが完了したとき、同じショット/アセットの次工程へ「進めていい」と伝える配線です。", "Wiring that tells the next task types on the same shot or asset they may proceed when a task finishes.")) + `</p>` +
 		rows.String() + `</section>`
 }
@@ -554,10 +571,15 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 		fallbackOptionsList = append(fallbackOptionsList, [2]string{fallback, handoffFallbackLabel(lang, fallback)})
 	}
 
+	noAssigneeValue := strings.TrimSpace(config.NoAssignee)
+	if noAssigneeValue == "" {
+		noAssigneeValue = model.HandoffFallbackDisabled
+	}
 	fallbackUserHidden := ""
-	if config.NoAssignee != model.HandoffFallbackUsers {
+	if noAssigneeValue != model.HandoffFallbackUsers {
 		fallbackUserHidden = " hidden"
 	}
+	fallbackUserOptions := handoffFallbackMemberOptions(db, project.DiscordGuildID, config.FallbackUserID, lang)
 	form := `<form method="post" action="` + esc(withLang("/bot/admin/handoff", r)) + `" class="section-stack" data-handoff-override-root data-empty-label="` + esc(t(lang, "行き先を追加してください", "Add a destination")) + `">` +
 		`<input type="hidden" name="project" value="` + esc(productionID) + `">` +
 		`<section class="flat-section"><h2>` + esc(t(lang, "この製作の上書き", "Overrides for this Production")) + `</h2>` +
@@ -565,11 +587,11 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 		`<div class="handoff-routes">` + overrideRows.String() + `</div></section>` +
 		`<section class="flat-section"><h2>` + esc(t(lang, "担当者なしの扱い", "When nobody is assigned")) + `</h2>` +
 		`<label class="conn-field-label" for="handoff-noassignee">` + esc(t(lang, "担当者なしの通知先", "Recipient when nobody is assigned")) + `</label>` +
-		forumSelect("no_assignee", config.NoAssignee, fallbackOptionsList, t(lang, "（選択）", "(choose)")) +
-		`<p class="conn-note">` + esc(t(lang, "「指定ユーザーに通知」を選ぶと、指定ユーザーIDの入力欄が表示されます。", "Choosing \"Notify a chosen user\" reveals the Discord user ID input.")) + `</p>` +
+		forumSelect("no_assignee", noAssigneeValue, fallbackOptionsList, "") +
+		`<p class="conn-note">` + esc(t(lang, "「指定したユーザーに通知」を選ぶと、通知先のメンバー選択欄が表示されます。", "Choosing \"Notify a chosen user\" reveals the member selector.")) + `</p>` +
 		`<div id="handoff-fallback-user-field"` + fallbackUserHidden + `>` +
-		`<label class="conn-field-label" for="handoff-fallback-user">` + esc(t(lang, "指定する人の Discord ユーザーID", "Discord user ID of the person to notify")) + `</label>` +
-		`<input id="handoff-fallback-user" name="fallback_user" value="` + esc(config.FallbackUserID) + `" autocomplete="off">` +
+		`<label class="conn-field-label" for="handoff-fallback-user">` + esc(t(lang, "通知するメンバー", "Member to notify")) + `</label>` +
+		`<select id="handoff-fallback-user" name="fallback_user">` + fallbackUserOptions + `</select>` +
 		`</div>` +
 		`</section>` +
 		`<div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)) + `">` + esc(t(lang, "通知設定に戻る", "Back to notifications")) + `</a> <button type="submit" class="btn">` + esc(t(lang, "保存", "Save")) + `</button></div></form>`
@@ -586,6 +608,39 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 // fallback user ID field shows only while the no-assignee handling
 // targets a chosen user.
 const handoffPageScript = `<script data-handoff-page>(function(){var root=document.querySelector("[data-handoff-override-root]");var emptyLabel=(root&&root.getAttribute("data-empty-label"))||"行き先を追加してください";document.querySelectorAll("[data-ov-row]").forEach(function(row){var id=row.getAttribute("data-ov-row");var select=row.querySelector("select[name=\"ov_mode_"+id+"\"]");var editor=document.querySelector("[data-ov-editor=\""+id+"\"]");var chips=row.querySelector("[data-ov-chips]");var resetBtn=row.querySelector("[data-ov-reset]");if(!select||!editor)return;var boxes=editor.querySelectorAll("input[type=checkbox][name^=\"ov_notify_\"]");var addSelect=editor.querySelector("[data-ov-add-select]");var addBtn=editor.querySelector("[data-ov-add]");function rebuildChips(){if(!chips)return;var checked=[];boxes.forEach(function(b){if(b.checked)checked.push(b)});chips.innerHTML="";if(checked.length===0){var empty=document.createElement("span");empty.className="route-none-label";empty.textContent=emptyLabel;chips.appendChild(empty)}else{checked.forEach(function(b){var chip=document.createElement("span");chip.className="route-chip";chip.textContent=b.getAttribute("data-route-name")||b.value;var rm=document.createElement("button");rm.type="button";rm.textContent="×";rm.setAttribute("aria-label",chip.textContent);rm.addEventListener("click",function(){b.checked=false;rebuildChips()});chip.appendChild(rm);chips.appendChild(chip)})}if(addSelect){var cur=addSelect.value;var first=addSelect.querySelector("option[value=\"\"]");addSelect.innerHTML="";if(first)addSelect.appendChild(first);boxes.forEach(function(b){if(b.checked)return;var opt=document.createElement("option");opt.value=b.value;opt.textContent=b.getAttribute("data-route-name")||b.value;addSelect.appendChild(opt)});addSelect.value=cur}}function apply(){var mode=select.value;row.querySelectorAll("[data-handoff-summary]").forEach(function(span){span.hidden=span.getAttribute("data-handoff-summary")!==mode});editor.hidden=mode!=="custom";if(resetBtn)resetBtn.hidden=mode==="inherit";if(mode==="none"){boxes.forEach(function(b){b.checked=false})}rebuildChips()}select.addEventListener("change",apply);if(resetBtn){resetBtn.addEventListener("click",function(){select.value="inherit";apply()})}if(addBtn&&addSelect){addBtn.addEventListener("click",function(){var val=addSelect.value;if(!val)return;boxes.forEach(function(b){if(b.value===val)b.checked=true});rebuildChips()})}apply()});var fallback=document.querySelector("select[name=\"no_assignee\"]"),field=document.getElementById("handoff-fallback-user-field");if(fallback&&field){var applyFallback=function(){field.hidden=fallback.value!=="users"};fallback.addEventListener("change",applyFallback);applyFallback()}})();</script>`
+
+func handoffFallbackMemberOptions(db *gorm.DB, guildID, current, lang string) string {
+	current = strings.TrimSpace(current)
+	var b strings.Builder
+	b.WriteString(`<option value="">` + esc(t(lang, "（選択）", "(choose)")) + `</option>`)
+	var members []DiscordGuildMember
+	if botToken := storedRuntimeDiscordBotToken(db); botToken != "" && isDiscordSnowflake(guildID) {
+		loaded, status, err := cachedGuildMembers(guildID, botToken)
+		if err == nil && status != guildDirectoryPending {
+			members = loaded
+		}
+	}
+	foundCurrent := false
+	for _, member := range members {
+		if member.User.Bot {
+			continue
+		}
+		id := strings.TrimSpace(member.User.ID)
+		if !isDiscordSnowflake(id) {
+			continue
+		}
+		selected := ""
+		if id == current {
+			selected = " selected"
+			foundCurrent = true
+		}
+		b.WriteString(`<option value="` + esc(id) + `"` + selected + `>` + esc(discordGuildMemberDisplayName(member)) + `</option>`)
+	}
+	if current != "" && !foundCurrent {
+		b.WriteString(`<option value="` + esc(current) + `" selected>` + esc(current) + `</option>`)
+	}
+	return b.String()
+}
 
 // renderHandoffSettingsLink is the production page's entry to the wiring
 // editor.

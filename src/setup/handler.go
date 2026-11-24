@@ -150,7 +150,7 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 			// Human email/password setup is no longer part of the current runtime
 			// authentication flow. Keep the old action as a safe redirect for
 			// bookmarked legacy forms; token validation happens in Connections.
-			http.Redirect(w, r, withLang("/bot/admin/bot?edit=1", r), http.StatusSeeOther)
+			http.Redirect(w, r, withLang("/bot/admin/bot/connections?edit=1", r), http.StatusSeeOther)
 			return
 			/*
 				_ = r.ParseForm()
@@ -193,7 +193,7 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 		if r.Method == http.MethodPost && r.FormValue("action") == "runtime_setup_from_session" {
 			// The legacy session action used to create a Kitsu bot account. Runtime
 			// credential setup is now an explicit Kitsu-only form operation.
-			http.Redirect(w, r, withLang("/bot/admin/bot?edit=1", r), http.StatusSeeOther)
+			http.Redirect(w, r, withLang("/bot/admin/bot/connections?edit=1", r), http.StatusSeeOther)
 			return
 		}
 
@@ -317,5 +317,5 @@ func renderKitsuConnectionError(lang string, args ...interface{}) string {
 			errMsg = message
 		}
 	}
-	return page(lang, t(lang, "Kitsu接続を確認できませんでした", "Kitsu connection could not be verified"), "#ff6a50", t(lang, "Bot tokenを確認し、接続設定からもう一度試してください。", "Check the Bot token and try again from Connections."), `<li>`+html.EscapeString(errMsg)+`</li>`, `<a href="`+appendLang("/bot/admin/bot?edit=1", lang)+`">`+t(lang, "接続設定へ戻る", "Back to Connections")+`</a>`)
+	return page(lang, t(lang, "Kitsu接続を確認できませんでした", "Kitsu connection could not be verified"), "#ff6a50", t(lang, "Bot tokenを確認し、接続設定からもう一度試してください。", "Check the Bot token and try again from Connections."), `<li>`+html.EscapeString(errMsg)+`</li>`, `<a href="`+appendLang("/bot/admin/bot/connections?edit=1", lang)+`">`+t(lang, "接続設定へ戻る", "Back to Connections")+`</a>`)
 }

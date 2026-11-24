@@ -937,7 +937,7 @@ func TestConnectionsPageUsesCatalogLabelsAndUnescapedStatusMarkup(t *testing.T) 
 	discoveryMu.Unlock()
 	db := newIAViewDB(t)
 	w := httptest.NewRecorder()
-	BotHandler(db, nil)(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil))
+	BotHandler(db, nil)(w, httptest.NewRequest("GET", "/bot/admin/bot/connections?lang=ja", nil))
 	body := w.Body.String()
 	for _, want := range []string{"\u63a5\u7d9a\u8a2d\u5b9a", "Kitsu\u63a5\u7d9a", "Discord Bot\u63a5\u7d9a", "\u672a\u8a2d\u5b9a"} {
 		if !strings.Contains(body, want) {
@@ -967,7 +967,7 @@ func TestConnectionsPageUsesCatalogLabelsAndUnescapedStatusMarkup(t *testing.T) 
 	}
 
 	w = httptest.NewRecorder()
-	BotHandler(db, nil)(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=en", nil))
+	BotHandler(db, nil)(w, httptest.NewRequest("GET", "/bot/admin/bot/connections?lang=en", nil))
 	enBody := w.Body.String()
 	if strings.Count(enBody, "<h1") != 1 || !strings.Contains(enBody, `<section class="section-card glass connections-card">`) {
 		t.Fatal("English Connections page does not preserve the shared page-shell structure")
@@ -1005,7 +1005,7 @@ func TestConnectionsSummaryUsesTwoExplicitPeerCards(t *testing.T) {
 	if got := strings.Count(body, "Edit connection settings"); got != 1 {
 		t.Fatalf("expected 1 unified edit connection button in English summary, got %d", got)
 	}
-	if !strings.Contains(body, `href="/bot/admin/bot?edit=1&amp;lang=en">Edit connection settings</a>`) {
+	if !strings.Contains(body, `href="/bot/admin/bot/connections?edit=1&amp;lang=en">Edit connection settings</a>`) {
 		t.Fatal("unified edit connection button missing ?edit=1 target")
 	}
 	body = renderConnectionsDisplayBodyWithHealth("ja", httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil), db, "", "ok", "接続済み", "https://kitsu.example.test", "configured-token", true, true)
@@ -1129,30 +1129,18 @@ func TestProductionNotificationLanguageSaveIsProductionScoped(t *testing.T) {
 	}
 }
 
-func TestVisibilityAndAuditTablesCollapseToLabeledCardsOnMobile(t *testing.T) {
+func TestAuditTableCollapsesToLabeledCardsOnMobile(t *testing.T) {
 	db := newIAViewDB(t)
-	db.Create(&model.Project{KitsuProjectID: "visibility-p", Name: "VeryLongProductionNameForMobile"})
 	model.WriteAuditLog(db, model.AuditLog{ProjectName: "VeryLongProductionNameForMobile", EntityName: "Storyboard", Success: true})
-	visibility := renderProductionVisibilitySection("en", httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db)
 	auditPage := httptest.NewRecorder()
 	renderIAAudit(auditPage, httptest.NewRequest("GET", "/bot/admin/audit?lang=en", nil), db)
-	for name, body := range map[string]string{
-		"visibility": visibility,
-		"audit":      auditPage.Body.String(),
-	} {
-		if !strings.Contains(body, `<table class="mobile-card-table">`) && !strings.Contains(body, `class="data-table mobile-card-table"`) {
-			t.Fatalf("%s table is missing the mobile card class", name)
-		}
-		var cells []string
-		if name == "visibility" {
-			cells = []string{`class="mobile-card-lead"><span class="mobile-card-lead-label" data-label="Production">`, `data-label="Visible to bot"`, `data-label="Task count"`, `data-label="Last polling success"`}
-		} else {
-			cells = []string{`data-label="Date and time"`, `data-label="Production"`, `data-label="Action"`, `data-label="Acting user"`, `data-label="Result"`}
-		}
-		for _, cell := range cells {
-			if !strings.Contains(body, cell) {
-				t.Fatalf("%s table cell lost its mobile label %s", name, cell)
-			}
+	body := auditPage.Body.String()
+	if !strings.Contains(body, `<table class="mobile-card-table">`) && !strings.Contains(body, `class="data-table mobile-card-table"`) {
+		t.Fatalf("audit table is missing the mobile card class")
+	}
+	for _, cell := range []string{`data-label="Date and time"`, `data-label="Production"`, `data-label="Action"`, `data-label="Acting user"`, `data-label="Result"`} {
+		if !strings.Contains(body, cell) {
+			t.Fatalf("audit table cell lost its mobile label %s", cell)
 		}
 	}
 	for _, rule := range []string{

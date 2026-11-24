@@ -157,14 +157,14 @@ func renderRoleBoxes(lang string, block statusRoleBlock, roleOptions [][2]string
 		if !edit {
 			return `<span class="role-chip role-chip-static">` + esc(status.name) + `</span>`
 		}
-		return `<span class="role-chip">` + esc(status.name) +
+		return `<span class="role-chip" data-role-chip>` + esc(status.name) +
 			`<input type="hidden" name="srole_project" value="` + esc(block.productionID) + `">` +
 			`<input type="hidden" name="srole_id" value="` + esc(status.id) + `">` +
 			`<input type="hidden" name="srole_name" value="` + esc(status.name) + `">` +
-			forumSelect("srole_role", block.roleByStatus[status.id], roleOptions, t(lang, "（使わない）", "(unused)")) + `</span>`
+			forumSelect("srole_role", block.roleByStatus[status.id], roleOptions, t(lang, "未割り当て", "Unassigned")) + `</span>`
 	}
 	var b strings.Builder
-	b.WriteString(`<div class="role-boxes">`)
+	b.WriteString(`<div class="role-boxes-group" data-role-boxes-group data-count-suffix="` + esc(t(lang, "件", "")) + `"><div class="role-boxes">`)
 	for _, speaking := range speakingRoles {
 		label := forumRoleLabel(lang, speaking.role)
 		switch speaking.role {
@@ -175,19 +175,21 @@ func renderRoleBoxes(lang string, block statusRoleBlock, roleOptions [][2]string
 		case model.ForumRoleDone:
 			label = t(lang, "完了", "Done")
 		}
-		b.WriteString(`<div class="role-box"><div class="role-box-head"><span class="dot" style="background:` + speaking.dot + `"></span>` + esc(label) + `<span class="cnt">` + esc(intLabel(len(byRole[speaking.role]), lang)) + `</span></div>`)
+		b.WriteString(`<div class="role-box" data-role-box="` + esc(speaking.role) + `"><div class="role-box-head"><span class="dot" style="background:` + speaking.dot + `"></span>` + esc(label) + `<span class="cnt" data-role-count>` + esc(intLabel(len(byRole[speaking.role]), lang)) + `</span></div>`)
 		for _, status := range byRole[speaking.role] {
 			b.WriteString(chip(status))
 		}
 		b.WriteString(`</div>`)
 	}
-	b.WriteString(`</div><div class="role-tray"><div class="role-tray-head">` + esc(t(lang, "未割り当て", "Unassigned")) + `</div>`)
+	b.WriteString(`</div><div class="role-tray" data-role-tray><div class="role-tray-head">` + esc(t(lang, "未割り当て", "Unassigned")) + `</div>`)
 	for _, status := range tray {
 		b.WriteString(chip(status))
 	}
-	b.WriteString(`</div>`)
+	b.WriteString(`</div></div>`)
 	return b.String()
 }
+
+const statusRolesEditorScript = `<script data-status-roles-editor>(function(){document.querySelectorAll("[data-role-boxes-group]").forEach(function(group){var suffix=group.getAttribute("data-count-suffix")||"";var tray=group.querySelector("[data-role-tray]");function updateCounts(){group.querySelectorAll("[data-role-box]").forEach(function(box){var cnt=box.querySelector("[data-role-count]");if(cnt){cnt.textContent=String(box.querySelectorAll("[data-role-chip]").length)+suffix}})}group.querySelectorAll("select[name=\"srole_role\"]").forEach(function(sel){sel.addEventListener("change",function(){var chip=sel.closest("[data-role-chip]");if(!chip)return;var target=group.querySelector("[data-role-box=\""+sel.value+"\"]")||tray;if(target){target.appendChild(chip);updateCounts()}})})})})();</script>`
 
 func renderStatusRolesSection(db *gorm.DB, lang string, r *http.Request) string {
 	blocks, statusErr := statusRoleBlocks(db)
@@ -214,11 +216,11 @@ func renderStatusRolesSection(db *gorm.DB, lang string, r *http.Request) string 
 	if selectorLinks.Len() > 0 {
 		selector = `<div class="audit-filter" role="navigation" aria-label="` + esc(t(lang, "プロダクションを選ぶ", "Choose a Production")) + `"><span class="field-help">` + esc(t(lang, "プロダクションを選ぶ", "Choose a Production")) + `</span>` + selectorLinks.String() + `</div>`
 	}
-	return `<form method="post" action="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `" class="section-stack">` +
+	return `<form method="post" action="` + esc(withLang("/bot/admin/bot/statuses", r)) + `" class="section-stack">` +
 		`<input type="hidden" name="action" value="save_status_roles">` +
-		`<section class="flat-section" id="status-roles"><div class="flat-section-head"><h2>` + esc(t(lang, "Kitsuのステータス → 役割", "Kitsu status → role")) + `</h2></div>` +
+		`<section class="flat-section" id="status-roles"><div class="flat-section-head"><h2>` + esc(t(lang, "タスクステータス", "Task statuses")) + `</h2></div>` +
 		note + selector + body.String() +
-		`<div class="button-row"><button type="submit" class="btn">` + esc(t(lang, "保存", "Save")) + `</button><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "キャンセル", "Cancel")) + `</a></div></section></form>`
+		`<div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "接続設定トップへ戻る", "Back to Connections hub")) + `</a><button type="submit" class="btn">` + esc(t(lang, "保存", "Save")) + `</button></div></section></form>` + statusRolesEditorScript
 }
 
 // renderStatusRolesDisplay is the read-only form of the same assignment on
@@ -229,7 +231,7 @@ func renderStatusRolesDisplay(db *gorm.DB, lang string, r *http.Request) string 
 	if len(blocks) == 0 {
 		return ""
 	}
-	return `<section class="flat-section" aria-labelledby="status-roles-display-title"><div class="flat-section-head"><h2 id="status-roles-display-title">` + esc(t(lang, "Kitsuのステータス → 役割", "Kitsu status → role")) + `</h2><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `#status-roles">` + esc(t(lang, "編集", "Edit")) + `</a></div>` + renderRoleBoxes(lang, blocks[0], nil, false) + `</section>`
+	return `<section class="flat-section" aria-labelledby="status-roles-display-title"><div class="flat-section-head"><h2 id="status-roles-display-title">` + esc(t(lang, "タスクステータス", "Task statuses")) + `</h2><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot/statuses", r)) + `">` + esc(t(lang, "編集", "Edit")) + `</a></div>` + renderRoleBoxes(lang, blocks[0], nil, false) + `</section>`
 }
 
 // saveStatusRoles applies one bot-page submit to every Production it carries

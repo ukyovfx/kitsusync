@@ -570,7 +570,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     // Enter the sensitive Connections edit route as the ordinary login target.
     // The normal login flow grants its existing short recent-auth window; this
     // lets the visual reference capture render without bypassing the guard.
-    await page.goto(`${base}/bot/admin/bot?edit=1&lang=en`, { waitUntil: 'networkidle' });
+    await page.goto(`${base}/bot/admin/bot/connections?edit=1&lang=en`, { waitUntil: 'networkidle' });
     if (!page.url().includes('/bot/login')) throw new Error('protected Connections edit route did not redirect to login');
     const unauthenticatedWrite = await page.request.post(`${base}/bot/admin/projects`, {
       form: { action: 'add_production_reviewer_target', project_id: 'reviewer-production', task_type_id: 'task-comp', target_kind: 'user', target_id: '22222222222222234' },
@@ -582,7 +582,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     await page.locator('#login-email').fill(username);
     await page.locator('#login-password').fill(password);
     await page.getByRole('button', { name: 'Login', exact: true }).click();
-    await page.waitForURL(url => url.pathname === '/bot/admin/bot' && url.searchParams.get('edit') === '1', { timeout: 10000 });
+    await page.waitForURL(url => url.pathname === '/bot/admin/bot/connections' && url.searchParams.get('edit') === '1', { timeout: 10000 });
     if (await context.cookies(base).then(cookies => !cookies.some(cookie => cookie.name === 'kitsu_admin_session' && cookie.httpOnly))) {
       throw new Error('normal login did not establish the HttpOnly KitsuSync session');
     }
@@ -845,7 +845,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         // row proves the status lister used the runtime token against the
         // synthetic Kitsu service.
         const forumSavedHref = page.url();
-        await page.goto(`${base}/bot/admin/bot?edit=1&lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        await page.goto(`${base}/bot/admin/bot/statuses?lang=${locale.lang}`, { waitUntil: 'networkidle' });
         const wfaRoleSelect = page.locator('.role-chip').filter({ has: page.locator('input[name="srole_id"][value="status-wfa"]') }).locator('select[name="srole_role"]');
         if (await wfaRoleSelect.count() !== 1) throw new Error(`Bot settings did not render the Waiting For Approval role row in ${locale.lang}`);
         if (await wfaRoleSelect.inputValue() !== 'wfa') throw new Error(`Bot settings did not keep the Waiting For Approval WFA destination in ${locale.lang}`);
@@ -879,7 +879,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         // The auto-create also fills the template status roles; since the
         // redesign they are edited on the Bot settings page, so that is
         // where the pre-fill is verified.
-        await page.goto(`${base}/bot/admin/bot?edit=1&lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        await page.goto(`${base}/bot/admin/bot/statuses?lang=${locale.lang}`, { waitUntil: 'networkidle' });
         for (const [statusID, role] of [['status-wfa', 'wfa'], ['status-retake', 'retake'], ['status-done', 'done']]) {
           const templateSelect = page.locator('.role-chip').filter({ has: page.locator(`input[name="srole_id"][value="${statusID}"]`) }).locator('select[name="srole_role"]');
           if (await templateSelect.count() !== 1) throw new Error(`Bot settings did not render the ${statusID} role row after zero-touch setup in ${locale.lang}`);
@@ -1605,15 +1605,15 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await page.screenshot({ path: path.join(output, `dashboard-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin', locale.lang, viewport.name, 'ready', 'Dashboard rendered without overflow or mojibake');
 
-        await page.goto(`${base}/bot/admin/bot?lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        await page.goto(`${base}/bot/admin/bot/connections?lang=${locale.lang}`, { waitUntil: 'networkidle' });
         if (!(await page.locator('.connections-summary-grid').count())) throw new Error(`Connections did not render in ${locale.lang}/${viewport.name}`);
         await page.screenshot({ path: path.join(output, `connections-read-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await record(page, '/bot/admin/bot', locale.lang, viewport.name, 'read only', 'Kitsu and Discord connection summaries rendered');
+        await record(page, '/bot/admin/bot/connections', locale.lang, viewport.name, 'read only', 'Kitsu and Discord connection summaries rendered');
 
-        await page.goto(`${base}/bot/admin/bot?edit=1&lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        await page.goto(`${base}/bot/admin/bot/connections?edit=1&lang=${locale.lang}`, { waitUntil: 'networkidle' });
         if (!(await page.locator('.connection-external-url-controls').count()) || !(await page.locator('#save-external-kitsu-url').count())) throw new Error(`Connections edit controls did not render in ${locale.lang}/${viewport.name}`);
         await page.screenshot({ path: path.join(output, `connections-edit-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await record(page, '/bot/admin/bot?edit=1', locale.lang, viewport.name, 'edit view, no submission', 'connection controls rendered without mutating settings');
+        await record(page, '/bot/admin/bot/connections?edit=1', locale.lang, viewport.name, 'edit view, no submission', 'connection controls rendered without mutating settings');
 
         if (viewport.name === 'desktop') {
           for (const backgroundViewport of backgroundViewports) {
@@ -1776,14 +1776,14 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       },
       {
         name: 'connections-read',
-        route: '/bot/admin/bot?lang=en',
+        route: '/bot/admin/bot/connections?lang=en',
         assert: async () => {
           if (!(await page.locator('.connections-summary-grid').count())) throw new Error('Connections read visual reference did not render its connection summary');
         },
       },
       {
         name: 'connections-edit',
-        route: '/bot/admin/bot?edit=1&lang=en',
+        route: '/bot/admin/bot/connections?edit=1&lang=en',
         assert: async () => {
           if (!(await page.locator('#external-kitsu-url-form').count())) throw new Error('Connections edit visual reference did not render the existing External Kitsu URL form');
           const controls = await page.locator('.connection-external-url-controls').evaluate(node => {
@@ -1811,11 +1811,11 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
 
     for (const lang of ['ja', 'en']) {
       await page.setViewportSize({ width: 390, height: 844 });
-      await page.goto(`${base}/bot/admin/bot?edit=1&lang=${lang}`, { waitUntil: 'networkidle' });
+      await page.goto(`${base}/bot/admin/bot/connections?edit=1&lang=${lang}`, { waitUntil: 'networkidle' });
       const externalControls = page.locator('.connection-external-url-controls');
       if (!(await externalControls.count()) || !(await externalControls.locator('#save-external-kitsu-url').count())) throw new Error(`External Kitsu URL controls are missing on mobile in ${lang}`);
       await page.screenshot({ path: path.join(output, `reference-connections-edit-${lang}-mobile.png`), fullPage: true });
-      await record(page, '/bot/admin/bot?edit=1', lang, 'mobile-reference', 'External Kitsu URL controls', 'input, Check link and Save remain visible without horizontal overflow');
+      await record(page, '/bot/admin/bot/connections?edit=1', lang, 'mobile-reference', 'External Kitsu URL controls', 'input, Check link and Save remain visible without horizontal overflow');
     }
 
     await page.setViewportSize({ width: 1440, height: 1000 });
@@ -2007,7 +2007,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     await fixture(page, 'ready');
     for (const locale of locales) {
       const prompts = [
-        { route: '/bot/admin/health', table: '.production-visibility table', labels: locale.lang === 'ja' ? ['Bot から見えているか', 'タスク件数', '最終ポーリング成功'] : ['Visible to bot', 'Task count', 'Last polling success'] },
+        { route: '/bot/admin/health', table: '.liveness table', labels: locale.lang === 'ja' ? ['状態', '最終成功'] : ['State', 'Last success'] },
         { route: '/bot/admin/audit', table: '.audit-log-table table', labels: locale.lang === 'ja' ? ['日時', 'プロダクション', '操作内容', '操作ユーザー', '結果'] : ['Date and time', 'Production', 'Action', 'Acting user', 'Result'] },
       ];
       for (const prompt of prompts) {
@@ -2287,13 +2287,13 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       // A9: connection form fields keep their label and control at the top of
       // the grid cell.
       await page.setViewportSize({ width: 1440, height: 900 });
-      await page.goto(`${base}/bot/admin/bot?edit=1&lang=${locale.lang}`, { waitUntil: 'networkidle' });
+      await page.goto(`${base}/bot/admin/bot/connections?edit=1&lang=${locale.lang}`, { waitUntil: 'networkidle' });
       const fields = await page.evaluate(() => {
         const found = [...document.querySelectorAll('.connection-form-field')];
         return { count: found.length, alignments: [...new Set(found.map(field => getComputedStyle(field).alignContent))] };
       });
       if (fields.count < 1 || fields.alignments.length !== 1 || fields.alignments[0] !== 'start') throw new Error(`connection form fields do not align to start (${locale.lang}): ${JSON.stringify(fields)}`);
-      await record(page, '/bot/admin/bot?edit=1', locale.lang, 'desktop', 'connection form alignment', fields.count + ' fields report align-content: start');
+      await record(page, '/bot/admin/bot/connections?edit=1', locale.lang, 'desktop', 'connection form alignment', fields.count + ' fields report align-content: start');
 
       // A12: keyboard focus must leave a visible outline on each focusable
       // field kind the page offers. Tab from the document start so

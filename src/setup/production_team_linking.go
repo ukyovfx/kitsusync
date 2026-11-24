@@ -206,3 +206,92 @@ func validatedDiscordGuildSelection(directory globalDiscordDirectory, requested 
 	}
 	return ""
 }
+
+// saveTeamUserLinks saves in-place Discord user linking changes submitted from
+// the Production Team tab into the canonical global UserMap table.
+func saveTeamUserLinks(db *gorm.DB, r *http.Request, botToken string) string {
+	_ = r.ParseForm()
+	projectID := strings.TrimSpace(r.FormValue("project_id"))
+	baseURL := withLang("/bot/admin/projects?project="+url.QueryEscape(projectID)+"&tab=team", r)
+	project := model.FindProjectByKitsuID(db, projectID)
+	if project == nil || model.IsValidationOnlyProject(db, projectID) || project.ReadOnlyPreview || strings.TrimSpace(project.DiscordGuildID) == "" {
+		return baseURL + "&msg=error"
+	}
+	if strings.TrimSpace(r.FormValue("discord_guild_id")) != strings.TrimSpace(project.DiscordGuildID) {
+		return baseURL + "&msg=error"
+	}
+	team, err := reviewerProductionTeamReader(db, projectID)
+	if err != nil {
+		return baseURL + "&msg=error"
+	}
+	botEmail := botAccountEmail(db)
+	teamByID := make(map[string]kitsu.Person, len(team))
+	for _, person := range team {
+		id := strings.TrimSpace(person.ID)
+		if id == "" || !person.Active || person.Archived || person.IsBot || (botEmail != "" && strings.EqualFold(strings.TrimSpace(person.Email), botEmail)) {
+			continue
+		}
+		teamByID[id] = person
+	}
+	clearLink := func(person kitsu.Person) {
+		if user := globalUserForKitsuPerson(filterAssignableUsers(model.ListUserMap(db), botEmail), person); user != nil && user.ID > 0 {
+			model.UpdateUserMap(db, user.ID, user.KitsuName, user.KitsuEmail, "")
+			model.UpdateUserMapDisplayName(db, user.ID, "")
+			db.Model(&model.UserMap{}).Where("id = ?", user.ID).Update("discord_guild_id", "")
+		}
+	}
+	if unlinkID := strings.TrimSpace(r.FormValue("unlink_team_kitsu_id")); unlinkID != "" {
+		person, ok := teamByID[unlinkID]
+		if !ok {
+			return baseURL + "&msg=error"
+		}
+		clearLink(person)
+		return baseURL + "&msg=saved"
+	}
+	kitsuIDs := r.PostForm["team_kitsu_id"]
+	discordIDs := r.PostForm["team_discord_user_id"]
+	if len(kitsuIDs) != len(discordIDs) {
+		return baseURL + "&msg=error"
+	}
+	if strings.TrimSpace(botToken) == "" {
+		botToken = storedRuntimeDiscordBotToken(db)
+	}
+	directory, err := globalDiscordDirectoryReader(botToken, project.DiscordGuildID)
+	if err != nil || validatedDiscordGuildSelection(directory, project.DiscordGuildID) == "" {
+		return baseURL + "&msg=error"
+	}
+	optionsByID := make(map[string]globalDiscordUserOption, len(directory.Options))
+	for _, opt := range directory.Options {
+		optionsByID[strings.TrimSpace(opt.ID)] = opt
+	}
+	type pendingLink struct {
+		person kitsu.Person
+		opt    *globalDiscordUserOption
+	}
+	pending := make([]pendingLink, 0, len(kitsuIDs))
+	for i, rawKitsuID := range kitsuIDs {
+		person, ok := teamByID[strings.TrimSpace(rawKitsuID)]
+		if !ok {
+			return baseURL + "&msg=error"
+		}
+		discordID := strings.TrimSpace(discordIDs[i])
+		if discordID == "" {
+			pending = append(pending, pendingLink{person: person})
+			continue
+		}
+		opt, ok := optionsByID[discordID]
+		if !ok || !isDiscordSnowflake(opt.ID) {
+			return baseURL + "&msg=error"
+		}
+		optCopy := opt
+		pending = append(pending, pendingLink{person: person, opt: &optCopy})
+	}
+	for _, item := range pending {
+		if item.opt == nil {
+			clearLink(item.person)
+		} else {
+			model.UpsertUserMapWithIdentity(db, strings.TrimSpace(item.person.ID), kitsuPersonDisplayName(item.person), strings.TrimSpace(item.person.Email), project.DiscordGuildID, item.opt.ID, item.opt.Name)
+		}
+	}
+	return baseURL + "&msg=saved"
+}

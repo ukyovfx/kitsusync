@@ -448,6 +448,10 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 			}
 			action := strings.TrimSpace(r.FormValue("action"))
 			projectID := strings.TrimSpace(r.FormValue("project_id"))
+			if action == "save_team_links" {
+				http.Redirect(w, r, saveTeamUserLinks(db, r, botToken), http.StatusSeeOther)
+				return
+			}
 			redirectURL := withLang("/bot/admin/projects", r)
 			if projectID != "" {
 				redirectURL += "&project=" + url.QueryEscape(projectID)
@@ -1280,9 +1284,6 @@ func HealthHandler(db *gorm.DB, pollInterval time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
-		if r.Method == http.MethodPost && handleAdminExceptionPost(db, w, r) {
-			return
-		}
 		if r.Method == http.MethodGet && r.URL.Query().Get("legacy") != "1" {
 			renderIAHealth(w, r, db, pollInterval)
 			return
@@ -1961,7 +1962,7 @@ func renderConnectionsDisplayBodyWithHealthRaw(lang string, r *http.Request, db 
 	discordConfigured := strings.TrimSpace(botToken) != ""
 	kitsuStatus := canonicalConnectionHealthStatus(lang, kitsuConfigured, kitsuHealthy)
 	discordStatus := canonicalConnectionHealthStatus(lang, discordConfigured, discordHealthy)
-	editURL := withLang("/bot/admin/bot?edit=1", r)
+	editURL := withLang("/bot/admin/bot/connections?edit=1", r)
 	kitsuTokenBox := `<div class="conn-robox is-unset">` + esc(t(lang, "未設定", "Not configured")) + `</div>`
 	if kitsuConfigured {
 		kitsuTokenBox = `<div class="conn-robox">` + esc(connectionSecretMask) + `</div>`
@@ -1981,7 +1982,6 @@ func renderConnectionsDisplayBodyWithHealthRaw(lang string, r *http.Request, db 
 	if strings.TrimSpace(linkURL) == "" {
 		linkURL = t(lang, "未設定", "Not configured")
 	}
-	endpointModeLabel := t(lang, "自動検出", "Automatic")
 	apiBaseRow := ""
 	if apiBaseURL != "" {
 		apiBaseRow = `<label class="conn-field-label">` + esc(t(lang, "API Base URL", "API Base URL")) + `</label><div class="hostrow"><span class="hostval">` + esc(apiBaseURL) + `</span></div>`
@@ -1992,22 +1992,18 @@ func renderConnectionsDisplayBodyWithHealthRaw(lang string, r *http.Request, db 
 	} else if discordConfigured {
 		discordNote = t(lang, "Discord Botの接続を確認してください。", "Check the Discord Bot connection.")
 	}
-	extra := ""
-	if db != nil {
-		extra = renderStatusRolesDisplay(db, lang, r) + renderStudioRoutesDisplay(db, lang, r)
-	}
 	return `<div class="connections-summary-grid">` +
 		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><span class="status-pill ` + esc(kitsuStatus.Class) + `" role="status">` + esc(kitsuStatus.Label) + `</span></div>` +
 		`<label class="conn-field-label">` + esc(t(lang, "Kitsu Bot APIトークン", "Kitsu Bot API token")) + `</label>` + kitsuTokenBox +
 		`<label class="conn-field-label">` + esc(t(lang, "外部 Kitsu URL（リンク用）", "External Kitsu URL (for links)")) + `</label>` +
 		`<div class="hostrow"><span class="hostval">` + esc(linkURL) + `</span></div>` +
 		`<p class="conn-note">` + esc(t(lang, "Discord通知のリンクに使います。", "Used for links in Discord notifications.")) + `</p>` +
-		`<details class="connection-advanced-details"><summary><span>` + esc(t(lang, "詳細設定", "Advanced settings")) + `</span><span class="v">` + esc(t(lang, "接続先（API用）：", "API endpoint: ")) + esc(endpointModeLabel) + ` <span class="chev">▸</span></span></summary>` +
+		`<details class="connection-advanced-details"><summary><span>` + esc(t(lang, "詳細設定", "Advanced settings")) + `</span><span class="chev">▸</span></summary>` +
 		`<div style="margin-top:10px;"><label class="conn-field-label">` + esc(t(lang, "Kitsu接続先（API用）", "Kitsu endpoint (for API)")) + `</label><div class="hostrow"><span class="hostval">` + esc(host) + `</span></div>` + apiBaseRow + `</div></details></section>` +
 		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><span class="status-pill ` + esc(discordStatus.Class) + `" role="status">` + esc(discordStatus.Label) + `</span></div>` +
 		`<label class="conn-field-label">` + esc(t(lang, "Discord Botトークン", "Discord Bot Token")) + `</label>` + discordTokenBox +
 		`<p class="conn-note">` + esc(discordNote) + `</p></section>` +
-		`</div><div class="button-row connections-actions"><a class="btn" href="` + esc(editURL) + `">` + esc(t(lang, "接続設定を編集", "Edit connection settings")) + `</a><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(t(lang, "プロダクション一覧へ戻る", "Back to Productions")) + `</a></div>` + extra
+		`</div><div class="button-row connections-actions"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "接続設定トップへ戻る", "Back to Connections hub")) + `</a><a class="btn" href="` + esc(editURL) + `">` + esc(t(lang, "接続設定を編集", "Edit connection settings")) + `</a></div>`
 }
 
 func renderConnectionsDisplayBodyWithHealth(lang string, r *http.Request, db *gorm.DB, statusHint, statusClass, statusLabel, host, botToken string, kitsuHealthy, discordHealthy bool) string {
@@ -2124,11 +2120,11 @@ func renderConnectionsEditFormWithExternalURLState(lang string, r *http.Request,
 	body := `<div class="section-stack connections-edit-stack" id="connections-edit">` + notice +
 		`<div class="connections-edit-grid">` +
 		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><span class="status-pill ` + esc(kitsuStatus.Class) + `" role="status">` + esc(kitsuStatus.Label) + `</span></div>` +
-		`<form method="POST" class="connection-save-form" id="kitsu-connection-form"><input type="hidden" name="action" value="save_kitsu"><div class="connection-form-field"><label class="conn-field-label" for="kitsu-bot-token">` + esc(t(lang, "Kitsu Bot APIトークン", "Kitsu Bot API token")) + `</label>` + kitsuTokenInput + `</div>` + externalURLField + advancedDetails + `<div class="button-row connections-actions conn-card-actions"><button id="kitsu-recheck" type="submit" class="btn">` + esc(connectionSaveLabel(lang, "Kitsu", kitsuConfigured)) + `</button>` + kitsuTokenActions + `<a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "キャンセル", "Cancel")) + `</a></div></form>` +
+		`<form method="POST" class="connection-save-form" id="kitsu-connection-form"><input type="hidden" name="action" value="save_kitsu"><div class="connection-form-field"><label class="conn-field-label" for="kitsu-bot-token">` + esc(t(lang, "Kitsu Bot APIトークン", "Kitsu Bot API token")) + `</label>` + kitsuTokenInput + `</div>` + externalURLField + advancedDetails + `<div class="button-row connections-actions conn-card-actions"><button id="kitsu-recheck" type="submit" class="btn">` + esc(connectionSaveLabel(lang, "Kitsu", kitsuConfigured)) + `</button>` + kitsuTokenActions + `<a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot/connections", r)) + `">` + esc(t(lang, "キャンセル", "Cancel")) + `</a></div></form>` +
 		`<form method="POST" id="external-kitsu-url-form" hidden><input type="hidden" name="action" value="save_external_kitsu_url"></form></section>` +
 		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><span class="status-pill ` + esc(discordStatus.Class) + `" role="status">` + esc(discordStatus.Label) + `</span></div>` +
 		`<form method="POST" class="connection-save-form"><input type="hidden" name="action" value="save_discord"><div class="connection-form-field"><label class="conn-field-label" for="discord-bot-token">` + esc(t(lang, "Discord Botトークン", "Discord Bot Token")) + `</label>` + discordTokenInput + `</div><p class="conn-note" style="margin-top:10px;">` + esc(discordStatusNote) + `</p><div class="connection-field-row"><dt>` + esc(t(lang, "Bot", "Bot")) + `</dt><dd>` + esc(identity) + `</dd></div><div class="button-row connections-actions conn-card-actions"><button id="discord-recheck" type="submit" class="btn">` + esc(connectionSaveLabel(lang, "Discord Bot", discordConfigured)) + `</button>` + discordTokenActions + `</div></form></section>` +
-		`</div><div class="button-row connections-navigation connections-footer"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(t(lang, "プロダクション一覧へ戻る", "Back to Productions")) + `</a></div><script>(function(){var saveText='` + esc(t(lang, "変更を保存", "Save changes")) + `';document.querySelectorAll('[data-token-change]').forEach(function(button){var input=document.getElementById(button.getAttribute('data-token-change')),cancel=document.querySelector('[data-token-cancel-button="'+button.getAttribute('data-token-cancel')+'"]'),submit=document.getElementById(button.getAttribute('data-token-submit'));if(!input)return;button.addEventListener('click',function(){input.disabled=false;input.value='';input.placeholder='';button.hidden=true;if(cancel)cancel.hidden=false;if(submit)submit.textContent=saveText;input.focus();});if(cancel)cancel.addEventListener('click',function(){input.value='';input.disabled=true;input.placeholder='` + esc(connectionSecretMask) + `';button.hidden=false;cancel.hidden=true;if(submit)submit.textContent=saveText;});});var host=document.getElementById('kitsu-hostname');var hostSubmit=document.getElementById('kitsu-recheck');if(host&&hostSubmit){host.addEventListener('input',function(){if(host.value!==host.getAttribute('data-initial-value'))hostSubmit.textContent=saveText;});}var externalURL=document.getElementById('kitsu-external-url'),externalURLSaveButton=document.getElementById('save-external-kitsu-url');if(externalURL&&externalURLSaveButton){function updateExternalURLSaveState(){externalURLSaveButton.disabled=externalURL.value===externalURL.getAttribute('data-initial-value');}externalURL.addEventListener('input',updateExternalURLSaveState);updateExternalURLSaveState();}}());</script></div>`
+		`</div><div class="button-row connections-navigation connections-footer"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "接続設定トップへ戻る", "Back to Connections hub")) + `</a></div><script>(function(){var saveText='` + esc(t(lang, "変更を保存", "Save changes")) + `';document.querySelectorAll('[data-token-change]').forEach(function(button){var input=document.getElementById(button.getAttribute('data-token-change')),cancel=document.querySelector('[data-token-cancel-button="'+button.getAttribute('data-token-cancel')+'"]'),submit=document.getElementById(button.getAttribute('data-token-submit'));if(!input)return;button.addEventListener('click',function(){input.disabled=false;input.value='';input.placeholder='';button.hidden=true;if(cancel)cancel.hidden=false;if(submit)submit.textContent=saveText;input.focus();});if(cancel)cancel.addEventListener('click',function(){input.value='';input.disabled=true;input.placeholder='` + esc(connectionSecretMask) + `';button.hidden=false;cancel.hidden=true;if(submit)submit.textContent=saveText;});});var host=document.getElementById('kitsu-hostname');var hostSubmit=document.getElementById('kitsu-recheck');if(host&&hostSubmit){host.addEventListener('input',function(){if(host.value!==host.getAttribute('data-initial-value'))hostSubmit.textContent=saveText;});}var externalURL=document.getElementById('kitsu-external-url'),externalURLSaveButton=document.getElementById('save-external-kitsu-url');if(externalURL&&externalURLSaveButton){function updateExternalURLSaveState(){externalURLSaveButton.disabled=externalURL.value===externalURL.getAttribute('data-initial-value');}externalURL.addEventListener('input',updateExternalURLSaveState);updateExternalURLSaveState();}}());</script></div>`
 	endpointScript := `<script>(function(){var autoField=document.querySelector('[data-kitsu-endpoint-auto]'),manualField=document.querySelector('[data-kitsu-endpoint-manual]'),autoInput=document.querySelector('[data-kitsu-host-auto]'),host=document.getElementById('kitsu-hostname'),internal=document.querySelector('[data-kitsu-internal-endpoint]'),autoBtn=document.querySelector('[data-endpoint-mode="auto"]'),manualBtn=document.querySelector('[data-endpoint-mode="manual"]');function setVisible(node,visible){if(!node)return;node.hidden=!visible;node.style.display=visible?'':'none';}function setEndpointMode(manual){setVisible(autoField,!manual);setVisible(manualField,manual);if(autoInput)autoInput.disabled=manual;if(host)host.disabled=!manual;if(internal)internal.hidden=!manual;if(autoBtn)autoBtn.classList.toggle('on',!manual);if(manualBtn)manualBtn.classList.toggle('on',manual);}if(manualBtn)manualBtn.addEventListener('click',function(){setEndpointMode(true);if(host)host.focus();});if(autoBtn)autoBtn.addEventListener('click',function(){if(autoInput&&host)host.value=autoInput.value;setEndpointMode(false);});setEndpointMode(` + func() string {
 		if resolvedHost == "" {
 			return "true"
@@ -2203,8 +2199,57 @@ func recentBotAuthenticationLoginURL(r *http.Request, lang string) string {
 	if lang != "" {
 		nextQuery.Set("lang", lang)
 	}
-	next := "/bot/admin/bot?" + nextQuery.Encode()
+	next := "/bot/admin/bot/connections?" + nextQuery.Encode()
 	return appendLang("/bot/login?next="+url.QueryEscape(next), lang)
+}
+
+func renderBotHubPage(w http.ResponseWriter, r *http.Request, db *gorm.DB, runtimeHealthy func() bool) {
+	lang := currentLang(r)
+	hostRaw := strings.TrimSpace(KitsuHostForUI(db))
+	readinessHost := normalizeKitsuHostname(hostRaw)
+	botToken := storedRuntimeDiscordBotToken(db)
+	readiness := sharedBotRuntimeReadiness(db, readinessHost, botToken)
+	kitsuStatus, discordStatus := canonicalConnectionStatuses(lang, db, readiness, runtimeHealthy)
+	connSummary := tr(lang, "connections.kitsu") + `: ` + kitsuStatus.Label + ` / ` + tr(lang, "connections.discord") + `: ` + discordStatus.Label
+
+	statusSummary := t(lang, "Kitsuのステータスを「確認待ち」「リテイク」「完了」「未割り当て」に割り当てます。", "Assign Kitsu task statuses to Waiting, Retake, Done, or Unassigned.")
+	wiringSummary := t(lang, "タスク完了時に次工程へ通知する基本の配線を設定します。", "Configure default handoff wiring between task types.")
+
+	hubCards := []struct {
+		title, desc, href, meta, action string
+	}{
+		{
+			title:  tr(lang, "connections.title"),
+			desc:   t(lang, "Kitsu と Discord Bot の接続状態とトークンを管理します。", "Manage Kitsu and Discord Bot connection status and credentials."),
+			href:   withLang("/bot/admin/bot/connections", r),
+			meta:   connSummary,
+			action: t(lang, "接続設定を開く", "Open connections"),
+		},
+		{
+			title:  t(lang, "タスクステータス", "Task statuses"),
+			desc:   statusSummary,
+			href:   withLang("/bot/admin/bot/statuses", r),
+			meta:   "",
+			action: t(lang, "タスクステータスを開く", "Open task statuses"),
+		},
+		{
+			title:  t(lang, "受け渡しの配線", "Handoff wiring"),
+			desc:   wiringSummary,
+			href:   withLang("/bot/admin/bot/wiring", r),
+			meta:   "",
+			action: t(lang, "受け渡しの配線を開く", "Open handoff wiring"),
+		},
+	}
+	var rows strings.Builder
+	for _, card := range hubCards {
+		metaHTML := ""
+		if card.meta != "" {
+			metaHTML = `<p class="conn-note">` + esc(card.meta) + `</p>`
+		}
+		rows.WriteString(`<section class="section-card glass"><div class="page-heading"><div><h2>` + esc(card.title) + `</h2><p class="hint">` + esc(card.desc) + `</p>` + metaHTML + `</div><div class="button-row"><a class="btn" href="` + esc(card.href) + `">` + esc(card.action) + `</a></div></div></section>`)
+	}
+	body := `<div class="section-stack" data-bot-hub>` + rows.String() + `</div>`
+	fmt.Fprint(w, adminPage(lang, tr(lang, "connections.title"), r, body))
 }
 
 func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy func() bool) http.HandlerFunc {
@@ -2212,9 +2257,47 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 		slog.Debug("BotHandler entered", "method", r.Method, "path", r.URL.Path)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
-		if r.Method == http.MethodGet && r.URL.Query().Get("legacy") != "1" && r.URL.Query().Get("edit") != "1" {
-			renderConnectionsPageSafeWithRuntime(w, r, db, runtimeHealthy)
-			return
+		path := strings.TrimRight(r.URL.Path, "/")
+		isConnectionsSubpage := strings.HasSuffix(path, "/connections")
+		isStatusesSubpage := strings.HasSuffix(path, "/statuses")
+		isWiringSubpage := strings.HasSuffix(path, "/wiring")
+		if r.Method == http.MethodGet && r.URL.Query().Get("legacy") != "1" {
+			if isStatusesSubpage {
+				notice := ""
+				if r.URL.Query().Get("msg") == "saved" {
+					notice = `<div class="notice notice-success" role="status">` + esc(t(lang, "タスクステータスを保存しました。", "Task statuses saved.")) + `</div>`
+				}
+				content := renderStatusRolesSection(db, lang, r)
+				if content == "" {
+					content = `<section class="section-card glass"><p class="hint">` + esc(t(lang, "フォーラム通知が設定されたプロダクションがまだありません。", "No Productions have forum notification settings yet.")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "接続設定トップへ戻る", "Back to Connections hub")) + `</a></div></section>`
+				}
+				fmt.Fprint(w, adminPage(lang, t(lang, "タスクステータス", "Task statuses"), r, `<div class="section-stack">`+notice+content+`</div>`))
+				return
+			}
+			if isWiringSubpage {
+				notice := ""
+				if r.URL.Query().Get("msg") == "saved" {
+					notice = `<div class="notice notice-success" role="status">` + esc(t(lang, "受け渡しの配線を保存しました。", "Handoff wiring saved.")) + `</div>`
+				}
+				content := renderStudioRoutesSection(db, lang, r)
+				if content == "" {
+					content = `<section class="section-card glass"><p class="hint">` + esc(t(lang, "利用可能なタスクタイプがありません。", "No task types are available.")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "接続設定トップへ戻る", "Back to Connections hub")) + `</a></div></section>`
+				}
+				fmt.Fprint(w, adminPage(lang, t(lang, "受け渡しの配線", "Handoff wiring"), r, `<div class="section-stack">`+notice+content+`</div>`))
+				return
+			}
+			if isConnectionsSubpage && r.URL.Query().Get("edit") != "1" {
+				renderConnectionsPageSafeWithRuntime(w, r, db, runtimeHealthy)
+				return
+			}
+			if !isConnectionsSubpage {
+				if r.URL.Query().Get("edit") == "1" {
+					http.Redirect(w, r, withLang("/bot/admin/bot/connections?edit=1", r), http.StatusSeeOther)
+					return
+				}
+				renderBotHubPage(w, r, db, runtimeHealthy)
+				return
+			}
 		}
 		effectiveHost := KitsuHostForUI(db)
 		editMode := r.URL.Query().Get("edit") == "1"
@@ -2244,19 +2327,19 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 			if action == "save_status_roles" {
 				if err := saveStatusRoles(db, r); err != nil {
 					w.WriteHeader(http.StatusBadRequest)
-					fmt.Fprint(w, adminPage(lang, t(lang, "Kitsuのステータス → 役割", "Kitsu status → role"), r, `<div class="section-stack"><div class="notice notice-error" role="alert"><strong>`+esc(t(lang, "保存できませんでした", "Could not save"))+`</strong>`+forumSaveErrorMarkup(lang, err, nil)+`</div></div>`))
+					fmt.Fprint(w, adminPage(lang, t(lang, "タスクステータス", "Task statuses"), r, `<div class="section-stack"><div class="notice notice-error" role="alert"><strong>`+esc(t(lang, "保存できませんでした", "Could not save"))+`</strong>`+forumSaveErrorMarkup(lang, err, nil)+`</div></div>`))
 					return
 				}
-				http.Redirect(w, r, withLang("/bot/admin/bot?edit=1", r)+"&msg=saved", http.StatusSeeOther)
+				http.Redirect(w, r, withLang("/bot/admin/bot/statuses", r)+"&msg=saved", http.StatusSeeOther)
 				return
 			}
 			if action == "save_studio_routes" {
 				if err := saveStudioRoutes(db, r); err != nil {
 					w.WriteHeader(http.StatusBadRequest)
-					fmt.Fprint(w, adminPage(lang, t(lang, "受け渡しの配線（スタジオ共通）", "Handoff wiring (studio default)"), r, `<div class="section-stack"><div class="notice notice-error" role="alert"><strong>`+esc(t(lang, "保存できませんでした", "Could not save"))+`</strong><p>`+esc(err.Error())+`</p></div></div>`))
+					fmt.Fprint(w, adminPage(lang, t(lang, "受け渡しの配線", "Handoff wiring"), r, `<div class="section-stack"><div class="notice notice-error" role="alert"><strong>`+esc(t(lang, "保存できませんでした", "Could not save"))+`</strong><p>`+esc(err.Error())+`</p></div></div>`))
 					return
 				}
-				http.Redirect(w, r, withLang("/bot/admin/bot?edit=1", r)+"&msg=saved", http.StatusSeeOther)
+				http.Redirect(w, r, withLang("/bot/admin/bot/wiring", r)+"&msg=saved", http.StatusSeeOther)
 				return
 			}
 			if action == "save_external_kitsu_url" {
@@ -2280,7 +2363,7 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					renderExternalKitsuURLSaveError(w, r, db, http.StatusInternalServerError, externalURLDraft, t(lang, "外部Kitsu URLを保存できませんでした。入力内容を確認して再試行してください。", "The External Kitsu URL could not be saved. Check the value and try again."))
 					return
 				}
-				http.Redirect(w, r, withLang("/bot/admin/bot?edit=1", r)+"&msg=external_kitsu_url_saved", http.StatusSeeOther)
+				http.Redirect(w, r, withLang("/bot/admin/bot/connections?edit=1", r)+"&msg=external_kitsu_url_saved", http.StatusSeeOther)
 				return
 			}
 			if action == "save_kitsu" {
@@ -2388,7 +2471,7 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					if kitsuReconnect != nil {
 						go kitsuReconnect()
 					}
-					http.Redirect(w, r, withLang("/bot/admin/bot", r)+"&msg=kitsu_bot_saved", http.StatusSeeOther)
+					http.Redirect(w, r, withLang("/bot/admin/bot/connections", r)+"&msg=kitsu_bot_saved", http.StatusSeeOther)
 					return
 				}
 				w.WriteHeader(http.StatusBadRequest)
@@ -2424,7 +2507,7 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					"stored_token_present", storedToken != "",
 					"fingerprint_match", storedToken == token,
 				)
-				http.Redirect(w, r, withLang("/bot/admin/bot", r)+"&msg=discord_saved", http.StatusSeeOther)
+				http.Redirect(w, r, withLang("/bot/admin/bot/connections", r)+"&msg=discord_saved", http.StatusSeeOther)
 				return
 			}
 			if r.URL.Query().Get("legacy") != "1" {
@@ -2550,8 +2633,6 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 		}
 		if editMode {
 			form := renderConnectionsEditFormWithHealth(lang, r, db, statusHint, statusClass, statusLabel, effectiveHost, kitsuHealthy, discordHealthy, discordStatus.BotName)
-			form += renderStatusRolesSection(db, lang, r)
-			form += renderStudioRoutesSection(db, lang, r)
 			fmt.Fprint(w, adminPage(lang, tr(lang, "connections.title"), r, form))
 			return
 		}

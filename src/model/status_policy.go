@@ -421,10 +421,9 @@ type StatusInfo struct {
 }
 
 // ReconcileStudioStatusPolicies folds the live Kitsu status list into the
-// policy table: new statuses are classified by name, ambiguous ones are
-// queued for a human, and a rename that would change an auto-derived nature
-// is queued instead of silently applied (the old nature keeps governing
-// until a human reclassifies). Manual rows are never re-derived.
+// policy table: new statuses are classified by name, and manual rows are never
+// re-derived. Unclassifiable statuses stay ambiguous without creating
+// admin_exceptions rows; operators assign them on the タスクステータス page.
 func ReconcileStudioStatusPolicies(db *gorm.DB, statuses []StatusInfo) error {
 	for _, status := range statuses {
 		name := strings.TrimSpace(status.Name)
@@ -435,11 +434,6 @@ func ReconcileStudioStatusPolicies(db *gorm.DB, statuses []StatusInfo) error {
 			row := StudioStatusPolicy{StatusID: status.ID, StatusName: name, Nature: nature, UpdatedAt: time.Now().UTC()}
 			if err := db.Create(&row).Error; err != nil {
 				return err
-			}
-			if nature == StatusNatureAmbiguous {
-				if err := RaiseAdminException(db, ExceptionStatusAmbiguous, status.ID, name, "", ""); err != nil {
-					return err
-				}
 			}
 			continue
 		}
@@ -456,14 +450,10 @@ func ReconcileStudioStatusPolicies(db *gorm.DB, statuses []StatusInfo) error {
 			continue
 		}
 		derived := ClassifyStatusName(name)
-		if derived == existing.Nature {
-			if err := db.Model(&StudioStatusPolicy{}).Where("status_id = ?", status.ID).Update("status_name", name).Error; err != nil {
-				return err
-			}
-			continue
-		}
-		detail := "renamed: " + existing.StatusName + " -> " + name + " (nature would change " + existing.Nature + " -> " + derived + ")"
-		if err := RaiseAdminException(db, ExceptionStatusRenamed, status.ID, name, "", detail); err != nil {
+		if err := db.Model(&StudioStatusPolicy{}).Where("status_id = ?", status.ID).Updates(map[string]interface{}{
+			"status_name": name,
+			"nature":      derived,
+		}).Error; err != nil {
 			return err
 		}
 	}

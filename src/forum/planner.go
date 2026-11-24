@@ -83,31 +83,43 @@ type Planner struct {
 }
 
 // NatureForStatus returns the classified nature of a Kitsu status, or "" when
-// neither the studio policies nor the saved role mapping know it.
+// neither the studio policies nor the saved role mapping know it. Manual
+// assignments in StatusRoles win over auto-derived name-dictionary policies.
 func (p Planner) NatureForStatus(statusID string) string {
-	if policy, ok := p.Policies[statusID]; ok {
+	if policy, ok := p.Policies[statusID]; ok && policy.Manual {
 		return policy.Nature
 	}
-	switch p.roleFromSettings(statusID) {
-	case model.ForumRoleWFA:
-		return model.StatusNatureReview
-	case model.ForumRoleRetake:
-		return model.StatusNatureRetake
-	case model.ForumRoleDone:
-		return model.StatusNatureDone
-	case model.ForumRoleWIP:
-		return model.StatusNatureWIP
+	if role := p.roleFromSettings(statusID); role != "" {
+		switch role {
+		case model.ForumRoleWFA:
+			return model.StatusNatureReview
+		case model.ForumRoleRetake:
+			return model.StatusNatureRetake
+		case model.ForumRoleDone:
+			return model.StatusNatureDone
+		case model.ForumRoleWIP:
+			return model.StatusNatureWIP
+		}
+	}
+	if policy, ok := p.Policies[statusID]; ok {
+		return policy.Nature
 	}
 	return ""
 }
 
-// RoleForStatus returns the forum role of a Kitsu status: the studio policy's
-// nature decides first, the saved per-Production mapping is the fallback.
+// RoleForStatus returns the forum role of a Kitsu status: manual assignments in
+// StatusRoles win over auto-derived name-dictionary policies.
 func (p Planner) RoleForStatus(statusID string) string {
+	if policy, ok := p.Policies[statusID]; ok && policy.Manual {
+		return model.StatusNatureRole(policy.Nature)
+	}
+	if role := p.roleFromSettings(statusID); role != "" {
+		return role
+	}
 	if policy, ok := p.Policies[statusID]; ok {
 		return model.StatusNatureRole(policy.Nature)
 	}
-	return p.roleFromSettings(statusID)
+	return ""
 }
 
 func (p Planner) roleFromSettings(statusID string) string {
