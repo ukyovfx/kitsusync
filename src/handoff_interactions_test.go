@@ -12,8 +12,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"app/src/api/discord"
 	"app/src/model"
@@ -49,7 +51,7 @@ func configureInteractionKey(t *testing.T, db *gorm.DB) ed25519.PrivateKey {
 // serveInteraction signs the body the way Discord does and runs the handler.
 func serveInteraction(t *testing.T, db *gorm.DB, private ed25519.PrivateKey, body []byte) (int, interactionResponseForTest) {
 	t.Helper()
-	timestamp := "1700000000"
+	timestamp := strconv.FormatInt(time.Now().UTC().Unix(), 10)
 	signed := append([]byte(timestamp), body...)
 	req := httptest.NewRequest(http.MethodPost, "/interactions", bytes.NewReader(body))
 	req.Header.Set("X-Signature-Ed25519", hex.EncodeToString(ed25519.Sign(private, signed)))
@@ -164,7 +166,7 @@ func TestHandoffInteractionsRejectUnverifiableCallbacks(t *testing.T) {
 		t.Fatalf("wrong key: code=%d", code)
 	}
 
-	timestamp := "1700000000"
+	timestamp := strconv.FormatInt(time.Now().UTC().Unix(), 10)
 	body := []byte(`{"type":1}`)
 	req := httptest.NewRequest(http.MethodPost, "/interactions", bytes.NewReader([]byte(`{"type":2}`)))
 	req.Header.Set("X-Signature-Ed25519", hex.EncodeToString(ed25519.Sign(private, append([]byte(timestamp), body...))))
@@ -178,6 +180,60 @@ func TestHandoffInteractionsRejectUnverifiableCallbacks(t *testing.T) {
 	model.DeleteSetting(db, setup.DiscordApplicationPublicKeySettingKey)
 	if code, _ := serveInteraction(t, db, private, []byte(`{"type":1}`)); code != http.StatusUnauthorized {
 		t.Fatalf("no key configured: code=%d", code)
+	}
+}
+
+func TestHandoffInteractionsTimestampReplayWindow(t *testing.T) {
+	db := handoffReplyDB(t, model.HandoffTimingMixed)
+	private := configureInteractionKey(t, db)
+	body := []byte(`{"type":1}`)
+
+	cases := []struct {
+		name      string
+		timestamp string
+		wantCode  int
+	}{
+		{
+			name:      "fresh",
+			timestamp: strconv.FormatInt(time.Now().UTC().Unix(), 10),
+			wantCode:  http.StatusOK,
+		},
+		{
+			name:      "too old",
+			timestamp: strconv.FormatInt(time.Now().UTC().Add(-6*time.Minute).Unix(), 10),
+			wantCode:  http.StatusUnauthorized,
+		},
+		{
+			name:      "too far in future",
+			timestamp: strconv.FormatInt(time.Now().UTC().Add(6*time.Minute).Unix(), 10),
+			wantCode:  http.StatusUnauthorized,
+		},
+		{
+			name:      "missing",
+			timestamp: "",
+			wantCode:  http.StatusUnauthorized,
+		},
+		{
+			name:      "unparseable",
+			timestamp: "not-a-timestamp",
+			wantCode:  http.StatusUnauthorized,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/interactions", bytes.NewReader(body))
+			signed := append([]byte(tc.timestamp), body...)
+			req.Header.Set("X-Signature-Ed25519", hex.EncodeToString(ed25519.Sign(private, signed)))
+			if tc.timestamp != "" {
+				req.Header.Set("X-Signature-Timestamp", tc.timestamp)
+			}
+			rec := httptest.NewRecorder()
+			handoffInteractionsHandler(db).ServeHTTP(rec, req)
+			if rec.Code != tc.wantCode {
+				t.Fatalf("%s: code=%d, want %d (body=%s)", tc.name, rec.Code, tc.wantCode, rec.Body.String())
+			}
+		})
 	}
 }
 
