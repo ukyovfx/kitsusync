@@ -74,59 +74,27 @@ type Planner struct {
 	DB         *gorm.DB
 	Production string
 	Settings   model.ProductionForumSettings
-	// Policies is the studio status classification (redesign core v2). When
-	// present it decides roles and signal gating; the per-Production
-	// StatusRoles remain as the fallback for statuses the studio has not
-	// classified yet.
+	// Policies is the studio-wide status classification (studio_status_policies).
+	// It is the sole source of truth for status roles and signal gating;
+	// per-Production StatusRoles are not consulted.
 	Policies map[string]model.StudioStatusPolicy
 	Now      time.Time
 }
 
-// NatureForStatus returns the classified nature of a Kitsu status, or "" when
-// neither the studio policies nor the saved role mapping know it. Manual
-// assignments in StatusRoles win over auto-derived name-dictionary policies.
+// NatureForStatus returns the classified nature of a Kitsu status from the
+// studio-wide policies, or "" when unknown.
 func (p Planner) NatureForStatus(statusID string) string {
-	if policy, ok := p.Policies[statusID]; ok && policy.Manual {
-		return policy.Nature
-	}
-	if role := p.roleFromSettings(statusID); role != "" {
-		switch role {
-		case model.ForumRoleWFA:
-			return model.StatusNatureReview
-		case model.ForumRoleRetake:
-			return model.StatusNatureRetake
-		case model.ForumRoleDone:
-			return model.StatusNatureDone
-		case model.ForumRoleWIP:
-			return model.StatusNatureWIP
-		}
-	}
 	if policy, ok := p.Policies[statusID]; ok {
 		return policy.Nature
 	}
 	return ""
 }
 
-// RoleForStatus returns the forum role of a Kitsu status: manual assignments in
-// StatusRoles win over auto-derived name-dictionary policies.
+// RoleForStatus returns the forum role of a Kitsu status from the studio-wide
+// policies, or "" when unassigned.
 func (p Planner) RoleForStatus(statusID string) string {
-	if policy, ok := p.Policies[statusID]; ok && policy.Manual {
-		return model.StatusNatureRole(policy.Nature)
-	}
-	if role := p.roleFromSettings(statusID); role != "" {
-		return role
-	}
 	if policy, ok := p.Policies[statusID]; ok {
 		return model.StatusNatureRole(policy.Nature)
-	}
-	return ""
-}
-
-func (p Planner) roleFromSettings(statusID string) string {
-	for _, row := range p.Settings.StatusRoles {
-		if row.StatusID == statusID {
-			return row.Role
-		}
 	}
 	return ""
 }

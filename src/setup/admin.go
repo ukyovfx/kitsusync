@@ -2005,7 +2005,33 @@ func renderConnectionsDisplayBodyWithHealthRaw(lang string, r *http.Request, db 
 		`<label class="conn-field-label">` + esc(t(lang, "Discord Botトークン", "Discord Bot Token")) + `</label>` + discordTokenBox +
 		`<p class="conn-note">` + esc(discordNote) + `</p></section>` +
 		`</div><div class="button-row connections-actions"><a class="btn" href="` + esc(editURL) + `">` + esc(t(lang, "接続設定を編集", "Edit connection settings")) + `</a><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(t(lang, "プロダクション一覧へ戻る", "Back to Productions")) + `</a></div>` +
-		`<div class="connections-sublinks" style="margin-top:16px;display:flex;gap:16px;flex-wrap:wrap;font-size:13.5px;"><a href="` + esc(withLang("/bot/admin/bot/statuses", r)) + `">` + esc(t(lang, "タスクステータス", "Task statuses")) + `</a><a href="` + esc(withLang("/bot/admin/bot/wiring", r)) + `">` + esc(t(lang, "受け渡しの配線", "Handoff wiring")) + `</a></div>`
+		renderConnectionsSubpageCards(lang, r)
+}
+
+func renderConnectionsSubpageCards(lang string, r *http.Request) string {
+	cards := []struct {
+		title, desc, href, action string
+	}{
+		{
+			title:  t(lang, "タスクステータス", "Task statuses"),
+			desc:   t(lang, "Kitsuのステータスを「確認待ち」「リテイク」「完了」「未割り当て」に割り当てます。", "Assign Kitsu task statuses to Waiting, Retake, Done, or Unassigned."),
+			href:   withLang("/bot/admin/bot/statuses", r),
+			action: t(lang, "タスクステータスを開く", "Open task statuses"),
+		},
+		{
+			title:  t(lang, "受け渡しの配線", "Handoff wiring"),
+			desc:   t(lang, "タスク完了時に次工程へ通知する基本の配線を設定します。", "Configure default handoff wiring between task types."),
+			href:   withLang("/bot/admin/bot/wiring", r),
+			action: t(lang, "受け渡しの配線を開く", "Open handoff wiring"),
+		},
+	}
+	var b strings.Builder
+	b.WriteString(`<div class="section-stack" style="margin-top:24px;">`)
+	for _, card := range cards {
+		b.WriteString(`<section class="section-card glass"><div class="page-heading"><div><h2>` + esc(card.title) + `</h2><p class="hint">` + esc(card.desc) + `</p></div><div class="button-row"><a class="btn" href="` + esc(card.href) + `">` + esc(card.action) + `</a></div></div></section>`)
+	}
+	b.WriteString(`</div>`)
+	return b.String()
 }
 
 func renderConnectionsDisplayBodyWithHealth(lang string, r *http.Request, db *gorm.DB, statusHint, statusClass, statusLabel, host, botToken string, kitsuHealthy, discordHealthy bool) string {
@@ -2229,7 +2255,7 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 				}
 				content := renderStatusRolesSection(db, lang, r)
 				if content == "" {
-					content = `<section class="section-card glass"><p class="hint">` + esc(t(lang, "フォーラム通知が設定されたプロダクションがまだありません。", "No Productions have forum notification settings yet.")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "接続設定へ戻る", "Back to Connections")) + `</a></div></section>`
+					content = `<section class="section-card glass"><p class="hint">` + esc(t(lang, "利用可能なステータスがありません。", "No task statuses are available.")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "接続設定へ戻る", "Back to Connections")) + `</a></div></section>`
 				}
 				fmt.Fprint(w, adminPage(lang, t(lang, "タスクステータス", "Task statuses"), r, `<div class="section-stack">`+notice+content+`</div>`))
 				return

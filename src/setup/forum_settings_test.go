@@ -386,9 +386,19 @@ func TestForumSettingsStatusListFailureKeepsSavedStatusRoles(t *testing.T) {
 	if w := forumPost(t, db, completeForumForm()); w.Code != http.StatusSeeOther {
 		t.Fatalf("seed save failed: %d", w.Code)
 	}
+	for _, p := range []struct{ id, name, nature string }{
+		{"s-wfa", "Waiting For Approval", model.StatusNatureReview},
+		{"s-retake", "Retake", model.StatusNatureRetake},
+		{"s-done", "Done", model.StatusNatureDone},
+		{"s-wip", "WIP", model.StatusNatureWIP},
+	} {
+		if err := model.SetStudioStatusPolicyNature(db, p.id, p.name, p.nature); err != nil {
+			t.Fatalf("seed policy: %v", err)
+		}
+	}
 	// Kitsu's status list is now unreachable. Re-saving the page exactly as it is
 	// rendered must not erase the saved status roles: the forum page carries
-	// them over, and the Bot page section keeps showing the saved rows.
+	// them over, and the Bot page section keeps showing the saved studio-wide rows.
 	forumStatusLister = func(*gorm.DB) ([]kitsu.TaskStatus, error) { return nil, forumTestError("kitsu down") }
 	w := httptest.NewRecorder()
 	forumHandler(db)(w, httptest.NewRequest(http.MethodGet, "/bot/admin/forum?project=p1&lang=en", nil))
@@ -396,7 +406,7 @@ func TestForumSettingsStatusListFailureKeepsSavedStatusRoles(t *testing.T) {
 	if !strings.Contains(body, "Saved status settings are kept") {
 		t.Fatal("the page must say the saved status settings are kept")
 	}
-	section := renderStatusRolesSection(db, "en", httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang=en", nil))
+	section := renderStatusRolesSection(db, "en", httptest.NewRequest(http.MethodGet, "/bot/admin/bot/statuses?lang=en", nil))
 	for _, id := range []string{"s-wfa", "s-retake", "s-done", "s-wip"} {
 		if !strings.Contains(section, `name="srole_id" value="`+id+`"`) {
 			t.Fatalf("saved status %s must stay in the Bot page section while Kitsu is unreachable", id)
@@ -421,10 +431,20 @@ func TestForumSettingsKeepsSavedStatusMissingFromLiveList(t *testing.T) {
 	stubForumLookups(t, nil)
 	db := newForumPageDB(t)
 	forumPost(t, db, completeForumForm())
+	for _, p := range []struct{ id, name, nature string }{
+		{"s-wfa", "Waiting For Approval", model.StatusNatureReview},
+		{"s-retake", "Retake", model.StatusNatureRetake},
+		{"s-done", "Done", model.StatusNatureDone},
+		{"s-wip", "WIP", model.StatusNatureWIP},
+	} {
+		if err := model.SetStudioStatusPolicyNature(db, p.id, p.name, p.nature); err != nil {
+			t.Fatalf("seed policy: %v", err)
+		}
+	}
 	forumStatusLister = func(*gorm.DB) ([]kitsu.TaskStatus, error) {
 		return []kitsu.TaskStatus{{ID: "s-wfa", Name: "Waiting For Approval"}}, nil // others vanished in Kitsu
 	}
-	section := renderStatusRolesSection(db, "en", httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang=en", nil))
+	section := renderStatusRolesSection(db, "en", httptest.NewRequest(http.MethodGet, "/bot/admin/bot/statuses?lang=en", nil))
 	for _, id := range []string{"s-retake", "s-done", "s-wip"} {
 		if !strings.Contains(section, `name="srole_id" value="`+id+`"`) {
 			t.Fatalf("saved status %s missing from the live list must stay in the Bot page section", id)
