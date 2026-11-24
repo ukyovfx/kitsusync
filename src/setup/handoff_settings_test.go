@@ -112,9 +112,20 @@ func TestStudioRoutesSectionRendersOnConnectionSettings(t *testing.T) {
 	stubHandoffTaskTypes(t, handoffTaskTypes())
 	db := newForumPageDB(t)
 	body := studioRoutesSection(t, db)
-	for _, want := range []string{`id="studio-routes"`, `name="action" value="save_studio_routes"`, `name="st_notify_tt-lay"`, `name="st_none_tt-comp"`, `class="route-row"`, `data-route-row="tt-lay"`, "Add source task type", `data-route-source-select`, `data-route-source-add`, `data-route-mode="wired"`, `data-route-mode="none"`} {
+	for _, want := range []string{`id="studio-routes"`, `name="action" value="save_studio_routes"`, `name="st_notify_tt-lay"`, `name="st_none_tt-comp"`, `class="route-row"`, `data-route-row="tt-lay"`, `data-route-edit-start`, `Edit wiring`, `data-route-edit-cancel`, `data-route-edit-actions`, `data-route-mode="wired"`, `data-route-mode="none"`, `data-route-add-select`, `data-route-add`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("studio section is missing %q", want)
+		}
+	}
+	for _, taskType := range handoffTaskTypes() {
+		wantItem := `<div class="route-item" data-route-item="` + taskType.ID + `">`
+		if !strings.Contains(body, wantItem) {
+			t.Fatalf("studio section must render all task types visibly from the start, missing %q", wantItem)
+		}
+	}
+	for _, gone := range []string{`data-route-source-select`, `data-route-source-add`, `data-route-toggle`, "Add source task type"} {
+		if strings.Contains(body, gone) {
+			t.Fatalf("studio section must omit removed control %q", gone)
 		}
 	}
 	if strings.Contains(body, "<h2>Handoff wiring</h2>") {
@@ -126,6 +137,28 @@ func TestStudioRoutesSectionRendersOnConnectionSettings(t *testing.T) {
 	}
 	if strings.Contains(body, `name="st_notify_tt-comp" value="tt-comp"`) {
 		t.Fatal("the studio editor offers Compositing as its own target")
+	}
+	// Normal mode renders read-only chips without × buttons.
+	if err := model.SaveStudioTaskRoute(db, model.StudioTaskRoute{FromTaskTypeID: "tt-lay", FromTaskTypeName: "Layout", NotifyTaskTypeIDs: "tt-anim"}); err != nil {
+		t.Fatal(err)
+	}
+	seeded := studioRoutesSection(t, db)
+	if !strings.Contains(seeded, `<span class="route-chip route-chip-static">Animation</span>`) {
+		t.Fatalf("normal mode must render static target chip without ×: %s", seeded)
+	}
+}
+
+func TestAdminButtonsHaveNoGlowBoxShadow(t *testing.T) {
+	css := adminThemeCSS + shellHeadExtras()
+	for _, glow := range []string{
+		"0 14px 30px rgba(232,90,26",
+		"0 8px 20px rgba(232,90,26",
+		"0 10px 24px rgba(232,90,26",
+		"0 8px 18px rgba(182,59,45",
+	} {
+		if strings.Contains(css, glow) {
+			t.Fatalf("button glow box-shadow %q must be removed", glow)
+		}
 	}
 }
 

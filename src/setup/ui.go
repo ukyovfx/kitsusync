@@ -297,7 +297,7 @@ button,input,select{font:inherit}
   left:4px;
   border-radius:999px;
   background:linear-gradient(135deg, rgba(232,90,26,.94), rgba(255,141,72,.88));
-  box-shadow:0 10px 24px rgba(232,90,26,.28);
+  box-shadow:none;
   transition:left .18s ease;
 }
 .lang-toggle[data-lang="en"] .lang-thumb{left:calc(50%);}
@@ -388,7 +388,7 @@ input[readonly],input[disabled],select[disabled]{opacity:.72;cursor:not-allowed;
 .btn:hover,.btn-sm:hover,.btn-ghost:hover,.btn-danger:hover{transform:translateY(-1px)}
 .btn:disabled,.btn-sm:disabled,.btn-ghost:disabled,.btn-danger:disabled{cursor:not-allowed;opacity:.72;transform:none}
 .btn:disabled,.btn-sm:disabled,.btn-ghost:disabled,.btn-danger:disabled{color:var(--muted);background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.1);box-shadow:none}
-.btn{color:#140904;background:linear-gradient(135deg, var(--accent), var(--accent-2));box-shadow:0 14px 30px rgba(232,90,26,.24);}
+.btn{color:#140904;background:linear-gradient(135deg, var(--accent), var(--accent-2));box-shadow:none;}
 .btn-sm{color:#140904;background:linear-gradient(135deg, rgba(255,141,72,.94), rgba(232,90,26,.9));padding:6px 10px;}
 .btn-ghost{color:var(--text);background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);}
 .btn-danger{color:#fff5f2;background:rgba(255,106,80,.18);border:1px solid rgba(255,106,80,.3);}
@@ -622,7 +622,9 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .nav-chip,.home-link,.action-link,.btn,.btn-sm,.btn-ghost,.btn-danger,.routing-row-menu summary,.wizard-exclude,.advanced-details summary{transition:color .18s ease,background-color .18s ease,border-color .18s ease,box-shadow .18s ease,opacity .18s ease}
   .nav-chip:hover,.home-link:hover,.action-link:hover,.btn:hover,.btn-sm:hover,.btn-ghost:hover,.btn-danger:hover,.routing-row-menu summary:hover,.wizard-exclude:hover,.advanced-details summary:hover{transform:none!important}
   .nav-chip:hover,.home-link:hover,.action-link:hover,.btn-ghost:hover,.routing-row-menu summary:hover,.wizard-exclude:hover{color:var(--text);background:var(--interaction-hover);border-color:var(--interaction-border)}
-  .btn:hover,.btn-sm:hover{box-shadow:0 8px 20px rgba(232,90,26,.18)}
+  .btn:hover,.btn-sm:hover{box-shadow:none;filter:brightness(1.06)}
+  .btn:active,.btn-sm:active{filter:brightness(.94)}
+  .btn-ghost:active,.btn-danger:active{opacity:.85}
   .btn-danger:hover{background:rgba(255,106,80,.24);border-color:rgba(255,106,80,.58)}
   .nav-chip:focus-visible,.home-link:focus-visible,.action-link:focus-visible,.btn:focus-visible,.btn-sm:focus-visible,.btn-ghost:focus-visible,.btn-danger:focus-visible,.routing-row-menu summary:focus-visible,.wizard-exclude:focus-visible,.advanced-details summary:focus-visible{outline:3px solid var(--interaction-focus);outline-offset:3px}
   .nav-chip.active,.nav-chip[aria-current="page"]{color:var(--text);background:var(--interaction-hover);border-color:rgba(255,141,72,.46);box-shadow:none;transform:none}
@@ -985,7 +987,7 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .production-context .production-storage-actions .btn{min-width:88px;height:var(--control-height-standard,44px)}
   .production-context .production-routing-editor .wizard-plan-table{overflow:visible}
   .production-context .routing-row-menu summary{position:relative;z-index:1101}
-  .production-context .routing-row-menu[open] summary{background:var(--surface-subtle);box-shadow:0 0 0 2px rgba(255,141,72,.12)}
+  .production-context .routing-row-menu[open] summary{background:var(--surface-subtle);box-shadow:none}
   .production-context .routing-row-menu-panel{position:absolute;z-index:1100;right:0;top:calc(100% + var(--space-1,4px));min-width:200px;max-width:min(280px,calc(100vw - 16px));max-height:none;overflow:visible;border-color:rgba(255,141,72,.35);background:var(--surface-overlay);box-shadow:0 16px 36px rgba(0,0,0,.48)}
   .production-context dialog select option{background:var(--surface-overlay);color:var(--text)}
   .production-context dialog select option:disabled{color:var(--muted);background:var(--surface-subtle)}
@@ -1247,7 +1249,6 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .route-targets-editor{margin-top:10px}
   .route-add-line{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
   .route-add-line select{width:260px;max-width:100%}
-  .route-source-adder{margin-top:16px;padding-top:14px;border-top:1px dashed var(--line)}
   .audit-filter-form{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:16px 0 4px}
   .audit-filter-form .lbl{font-size:12.5px;color:var(--muted)}
   .audit-filter-form .right{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -1265,7 +1266,7 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .handoff-override-row .inh{flex:1;font-size:12.5px;color:var(--muted);min-width:120px}
   .handoff-override-row .inh.is-override{color:var(--accent-2);font-weight:600}
   .handoff-override-editor{padding:4px 0 12px 162px}
-  .route-item[hidden],.route-row[hidden],.route-editor[hidden],.route-targets-editor[hidden],.editorial-workbench .btn[hidden],.editorial-workbench .btn-ghost[hidden]{display:none}
+  .route-item[hidden],.route-row[hidden],.route-editor[hidden],.route-targets-editor[hidden],.handoff-override-row select[hidden],.handoff-override-editor[hidden],.route-edit-actions[hidden],[data-route-edit-start][hidden],[data-route-back][hidden],.editorial-workbench .btn[hidden],.editorial-workbench .btn-ghost[hidden]{display:none}
   .editorial-workbench .connection-external-url-controls .btn,.editorial-workbench .connection-external-url-controls .btn-ghost{flex:0 0 auto;width:auto;white-space:nowrap}
   .system-status-sections .system-observability-grid{margin-top:var(--system-status-heading-to-content)}
   @media(max-width:760px){.role-boxes{grid-template-columns:1fr}.route-row{flex-direction:column;gap:6px}.route-row .route-src{width:auto}.route-editor{padding-left:0}.handoff-override-editor{padding-left:0}.conn-kvrow{flex-direction:column;align-items:flex-start}.conn-kvrow .v{text-align:left}}
@@ -1288,7 +1289,7 @@ func shellHeadExtras() string {
     }
   } catch (e) {}
 })();
-</script><style>.wizard-plan-table tbody tr{cursor:grab}.wizard-plan-table tbody tr:focus-visible{outline:2px solid var(--accent-2);outline-offset:-2px}.wizard-plan-table tbody tr.drag-over{box-shadow:inset 0 -3px 0 var(--accent-2)}.wizard-exclude{width:28px;height:28px;border:0;border-radius:7px;background:transparent;color:var(--muted);cursor:pointer;white-space:nowrap;word-break:keep-all}.wizard-exclude:hover,.wizard-exclude:focus-visible{color:#ffae8b;background:rgba(255,141,72,.12);outline:2px solid rgba(255,141,72,.5);outline-offset:2px}.wizard-add-task-type{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.wizard-add-task-type-options{display:flex;align-items:end;gap:8px;flex-wrap:wrap}.wizard-add-task-type-options label{width:100%;margin:0}.wizard-add-task-type-options select{min-width:220px;max-width:100%}.wizard-add-toggle[disabled]{cursor:not-allowed;opacity:.6}.production-routing-editor .routing-destination-select{color-scheme:dark}.production-routing-editor .routing-destination-select option{background:#191a1e;color:#f7f7f4}.production-routing-editor .routing-destination-select:focus{outline:2px solid rgba(255,141,72,.35);outline-offset:1px}.routing-delete-dialog{z-index:1001;background:#17181c;border-color:rgba(255,106,80,.72);box-shadow:0 24px 70px rgba(0,0,0,.62)}.routing-delete-dialog::backdrop{background:rgba(0,0,0,.84)}.routing-delete-dialog .btn-danger{background:#b63b2d;border-color:#ef6a59;color:#fff8f5;box-shadow:0 8px 18px rgba(182,59,45,.28)}.routing-delete-dialog .btn-danger:disabled{opacity:.5;filter:saturate(.45);cursor:not-allowed}.production-list-link{display:block;min-width:0;padding:2px 6px;border-radius:8px;color:inherit;text-decoration:none}.production-list-link:hover .production-list-open,.production-list-link:focus-visible .production-list-open{text-decoration:underline}.production-list-link:focus-visible{outline:2px solid var(--accent-2);outline-offset:2px}.production-list-open{color:var(--muted);font-size:12px;white-space:nowrap}.wizard-confirm-control{text-transform:none;letter-spacing:normal;font-family:inherit}</style>`
+</script><style>.wizard-plan-table tbody tr{cursor:grab}.wizard-plan-table tbody tr:focus-visible{outline:2px solid var(--accent-2);outline-offset:-2px}.wizard-plan-table tbody tr.drag-over{box-shadow:inset 0 -3px 0 var(--accent-2)}.wizard-exclude{width:28px;height:28px;border:0;border-radius:7px;background:transparent;color:var(--muted);cursor:pointer;white-space:nowrap;word-break:keep-all}.wizard-exclude:hover,.wizard-exclude:focus-visible{color:#ffae8b;background:rgba(255,141,72,.12);outline:2px solid rgba(255,141,72,.5);outline-offset:2px}.wizard-add-task-type{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.wizard-add-task-type-options{display:flex;align-items:end;gap:8px;flex-wrap:wrap}.wizard-add-task-type-options label{width:100%;margin:0}.wizard-add-task-type-options select{min-width:220px;max-width:100%}.wizard-add-toggle[disabled]{cursor:not-allowed;opacity:.6}.production-routing-editor .routing-destination-select{color-scheme:dark}.production-routing-editor .routing-destination-select option{background:#191a1e;color:#f7f7f4}.production-routing-editor .routing-destination-select:focus{outline:2px solid rgba(255,141,72,.35);outline-offset:1px}.routing-delete-dialog{z-index:1001;background:#17181c;border-color:rgba(255,106,80,.72);box-shadow:0 24px 70px rgba(0,0,0,.62)}.routing-delete-dialog::backdrop{background:rgba(0,0,0,.84)}.routing-delete-dialog .btn-danger{background:#b63b2d;border-color:#ef6a59;color:#fff8f5;box-shadow:none}.routing-delete-dialog .btn-danger:disabled{opacity:.5;filter:saturate(.45);cursor:not-allowed}.production-list-link{display:block;min-width:0;padding:2px 6px;border-radius:8px;color:inherit;text-decoration:none}.production-list-link:hover .production-list-open,.production-list-link:focus-visible .production-list-open{text-decoration:underline}.production-list-link:focus-visible{outline:2px solid var(--accent-2);outline-offset:2px}.production-list-open{color:var(--muted);font-size:12px;white-space:nowrap}.wizard-confirm-control{text-transform:none;letter-spacing:normal;font-family:inherit}</style>`
 }
 
 func langToggleHTML(r *http.Request, lang string) string {
