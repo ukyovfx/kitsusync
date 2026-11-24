@@ -47,18 +47,18 @@ func TestHandoffRoutesTableRendersBothLayers(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := handoffGet(t, db).Body.String()
-	if got := strings.Count(body, `<table class="data-table handoff-routes">`); got != 1 {
-		t.Fatalf("production page routes tables = %d, want 1 (overrides only)", got)
+	if got := strings.Count(body, `<div class="handoff-routes">`); got != 1 {
+		t.Fatalf("production page routes containers = %d, want 1 (overrides only)", got)
 	}
 	section := studioRoutesSection(t, db)
-	if got := strings.Count(section, `<table class="data-table handoff-routes">`); got != 1 {
-		t.Fatalf("studio section routes tables = %d, want 1", got)
+	if got := strings.Count(section, `id="studio-routes"`); got != 1 {
+		t.Fatalf("studio section routes containers = %d, want 1", got)
 	}
 	for _, taskType := range handoffTaskTypes() {
-		if !strings.Contains(body, `<th scope="row">`+taskType.Name+`</th>`) {
+		if !strings.Contains(body, `<span class="src">`+taskType.Name+`</span>`) {
 			t.Fatalf("production row header %q missing", taskType.Name)
 		}
-		if !strings.Contains(section, `<th scope="row">`+taskType.Name+`</th>`) {
+		if !strings.Contains(section, `<span class="route-src">`+taskType.Name+`</span>`) {
 			t.Fatalf("studio row header %q missing", taskType.Name)
 		}
 	}

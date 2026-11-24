@@ -647,7 +647,7 @@ func TestAuditLogProductionFilterNarrowsRows(t *testing.T) {
 		return w.Body.String()
 	}
 	all := render("/bot/admin/audit?lang=en")
-	for _, want := range []string{`class="audit-filter"`, ">All</a>", "production=Alpha+Production", "production=Beta+Production", `data-label="Production">Alpha Production`, `data-label="Production">Beta Production`} {
+	for _, want := range []string{`class="audit-filter-form"`, `<option value="">All</option>`, `<option value="Alpha Production">Alpha Production</option>`, `<option value="Beta Production">Beta Production</option>`, `data-label="Production">Alpha Production`, `data-label="Production">Beta Production`} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("unfiltered audit page missing %q", want)
 		}
@@ -659,7 +659,7 @@ func TestAuditLogProductionFilterNarrowsRows(t *testing.T) {
 	if strings.Contains(filtered, `data-label="Production">Alpha Production`) {
 		t.Fatal("filtered audit page kept the other production's rows")
 	}
-	if !strings.Contains(filtered, "production=Alpha+Production") {
+	if !strings.Contains(filtered, `<option value="Alpha Production">Alpha Production</option>`) {
 		t.Fatal("filtered audit page lost the filter choices")
 	}
 	unknown := render("/bot/admin/audit?lang=en&production=Missing")
@@ -999,9 +999,24 @@ func TestConnectionsSummaryUsesTwoExplicitPeerCards(t *testing.T) {
 	if strings.Contains(body, `connections-card-header"><div>`) || strings.Contains(body, `role="status">Connected</span></div><section`) {
 		t.Fatal("summary retained the redundant combined status header")
 	}
+	if strings.Contains(body, "conn-card-actions") || strings.Contains(body, "Edit and configure") {
+		t.Fatal("summary retained per-card edit buttons")
+	}
+	if got := strings.Count(body, "Edit connection settings"); got != 1 {
+		t.Fatalf("expected 1 unified edit connection button in English summary, got %d", got)
+	}
+	if !strings.Contains(body, `href="/bot/admin/bot?edit=1&amp;lang=en">Edit connection settings</a>`) {
+		t.Fatal("unified edit connection button missing ?edit=1 target")
+	}
 	body = renderConnectionsDisplayBodyWithHealth("ja", httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil), db, "", "ok", "接続済み", "https://kitsu.example.test", "configured-token", true, true)
 	if !strings.Contains(body, "Kitsu接続") || !strings.Contains(body, "Discord Bot接続") || strings.Contains(body, "configured-token") || !strings.Contains(body, connectionSecretMask) {
 		t.Fatal("Japanese summary did not preserve explicit service labels or secret safety")
+	}
+	if strings.Contains(body, "conn-card-actions") || strings.Contains(body, "編集して設定") {
+		t.Fatal("Japanese summary retained per-card edit buttons")
+	}
+	if got := strings.Count(body, "接続設定を編集"); got != 1 {
+		t.Fatalf("expected 1 unified edit connection button in Japanese summary, got %d", got)
 	}
 }
 

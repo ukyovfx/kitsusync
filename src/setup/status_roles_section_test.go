@@ -90,3 +90,37 @@ func TestSaveStatusRolesStoresAndForumSavePreserves(t *testing.T) {
 		t.Fatalf("roles after forum save = %+v ok=%v err=%v", loaded.StatusRoles, ok, err)
 	}
 }
+
+func TestStatusRolesDisplayOmitsProductionHeadingAndSummaryLine(t *testing.T) {
+	stubForumLookups(t, nil)
+	db := newForumPageDB(t)
+	settings := model.ProductionForumSettings{
+		Config: model.ProductionForumConfig{ProductionID: "p1", GuildID: "g1"},
+		Routes: []model.ProductionForumRoute{{ProductionID: "p1", TaskTypeID: "tt-comp", TaskTypeName: "Compositing", ForumChannelID: "f-comp"}},
+		Tags: []model.ProductionForumTag{
+			{ProductionID: "p1", ForumChannelID: "f-comp", Role: model.ForumRoleWFA, TagID: "t1"},
+			{ProductionID: "p1", ForumChannelID: "f-comp", Role: model.ForumRoleRetake, TagID: "t2"},
+			{ProductionID: "p1", ForumChannelID: "f-comp", Role: model.ForumRoleDone, TagID: "t3"},
+		},
+		StatusRoles: []model.ProductionForumStatusRole{
+			{StatusID: "s-wfa", StatusName: "Waiting For Approval", Role: model.ForumRoleWFA},
+			{StatusID: "s-retake", StatusName: "Retake", Role: model.ForumRoleRetake},
+			{StatusID: "s-done", StatusName: "Done", Role: model.ForumRoleDone},
+		},
+	}
+	if err := model.SaveProductionForumSettings(db, settings); err != nil {
+		t.Fatalf("seed settings: %v", err)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/bot/admin/bot?lang=en", nil)
+	body := renderStatusRolesDisplay(db, "en", r)
+	for _, want := range []string{"Kitsu status → role", `class="role-boxes"`, `class="role-chip role-chip-static"`, "Waiting For Approval"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("display section missing %q: %s", want, body)
+		}
+	}
+	for _, gone := range []string{"<h3>", "role-summary-line", "all three roles are assigned", "Alpha"} {
+		if strings.Contains(body, gone) {
+			t.Fatalf("display section must omit %q: %s", gone, body)
+		}
+	}
+}
