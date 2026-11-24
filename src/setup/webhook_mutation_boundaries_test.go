@@ -20,6 +20,12 @@ func TestCompleteConnectionCleanupRechecksWebhookStateAfterWaitingForApply(t *te
 	}
 
 	unlockApply := lockProductionNotificationApply(project.KitsuProjectID)
+	recentToken, err := newRecentlyAuthenticatedSessionTokenChecked("admin@example.test", "kitsu-token", "admin")
+	if err != nil {
+		unlockApply()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = destroySession(recentToken) })
 	requestStarted := make(chan struct{})
 	requestDone := make(chan struct{})
 	response := httptest.NewRecorder()
@@ -28,6 +34,7 @@ func TestCompleteConnectionCleanupRechecksWebhookStateAfterWaitingForApply(t *te
 		form := url.Values{"action": {"complete_connection_cleanup"}, "project_id": {project.KitsuProjectID}, "confirm_text": {"delete"}}
 		request := httptest.NewRequest(http.MethodPost, "/bot/admin/projects?project=cleanup-race", strings.NewReader(form.Encode()))
 		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: recentToken})
 		close(requestStarted)
 		AdminProjectsHandler(db, "", "")(response, request)
 	}()

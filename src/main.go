@@ -1329,10 +1329,14 @@ func main() {
 		// BotHandler persists shared runtime credentials and triggers reconnect.
 		kitsuReconnect := func() { onRuntimeConfigured() }
 		botHandler := setup.BotHandlerWithRuntime(db, kitsuReconnect, runtime.ready)
-		mux.HandleFunc(prefix+"/admin/bot", setup.RequireSession(setup.RejectValidationMutation(func(w http.ResponseWriter, r *http.Request) {
+		botRouteHandler := setup.RequireSession(setup.RejectValidationMutation(func(w http.ResponseWriter, r *http.Request) {
 			slog.Debug("Admin bot route dispatched", "method", r.Method, "path", r.URL.Path)
 			botHandler(w, r)
-		})))
+		}))
+		mux.HandleFunc(prefix+"/admin/bot", botRouteHandler)
+		mux.HandleFunc(prefix+"/admin/bot/connections", botRouteHandler)
+		mux.HandleFunc(prefix+"/admin/bot/statuses", botRouteHandler)
+		mux.HandleFunc(prefix+"/admin/bot/wiring", botRouteHandler)
 		mux.HandleFunc(prefix+"/admin/projects", setup.RequireSession(setup.ReadOnlyAuditRoute(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
 			botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
 			setup.AdminProjectsHandler(db, fallbackGuildID, botToken)(w, r)

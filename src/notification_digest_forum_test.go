@@ -29,7 +29,7 @@ func forumDigestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Project{}, &model.Setting{}, &model.UserMap{}, &model.AuditLog{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationWriteLock{}, &model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{}, &model.ProductionForumConfig{}, &model.ProductionForumRoute{}, &model.ProductionForumStatusRole{}, &model.ProductionForumTag{}, &model.ForumBaseline{}, &model.ForumTask{}, &model.ForumTransition{}, &model.ForumOutbox{}, &model.ForumFlapState{}, &model.ForumDMChannel{}); err != nil {
+	if err := db.AutoMigrate(&model.Project{}, &model.Setting{}, &model.UserMap{}, &model.AuditLog{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationWriteLock{}, &model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{}, &model.ProductionForumConfig{}, &model.ProductionForumRoute{}, &model.ProductionForumStatusRole{}, &model.ProductionForumTag{}, &model.StudioStatusPolicy{}, &model.ForumBaseline{}, &model.ForumTask{}, &model.ForumTransition{}, &model.ForumOutbox{}, &model.ForumFlapState{}, &model.ForumDMChannel{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.CreateProject(db, "p1", "Production", "", "guild-1", "category-1", "ja"); err != nil {
@@ -51,6 +51,15 @@ func forumDigestDB(t *testing.T) *gorm.DB {
 	}
 	if err := model.SaveProductionForumSettings(db, settings); err != nil {
 		t.Fatal(err)
+	}
+	for _, p := range []struct{ id, name, nature string }{
+		{"s-wfa", "WFA", model.StatusNatureReview},
+		{"s-retake", "Retake", model.StatusNatureRetake},
+		{"s-done", "Done", model.StatusNatureDone},
+	} {
+		if err := model.SetStudioStatusPolicyNature(db, p.id, p.name, p.nature); err != nil {
+			t.Fatal(err)
+		}
 	}
 	project := model.ListProjects(db)[0]
 	if err := model.UpsertProjectReviewerTarget(db, project.ID, "tt-comp", "Compositing", model.ReviewerTargetUser, "111111111111111111"); err != nil {

@@ -600,12 +600,13 @@ func (e Executor) currentRoleAndForum(task model.ForumTask) (string, string, err
 	if !ok {
 		return "", "", fmt.Errorf("forum settings missing for %s", task.ProjectID)
 	}
+	policies, err := model.LoadStudioStatusPolicies(e.DB)
+	if err != nil {
+		return "", "", err
+	}
 	role := ""
-	for _, row := range settings.StatusRoles {
-		if row.StatusID == task.StatusID {
-			role = row.Role
-			break
-		}
+	if policy, ok := policies[task.StatusID]; ok {
+		role = model.StatusNatureRole(policy.Nature)
 	}
 	forumID := task.ForumID
 	if forumID == "" {

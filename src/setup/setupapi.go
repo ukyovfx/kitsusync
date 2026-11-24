@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -144,7 +145,7 @@ func discordPermissionBitsFromRoles(guildID string, memberRoleIDs []string, role
 }
 
 func fetchDiscordEffectivePermissions(guildID, botUserID, botToken string) (DiscordPermissionInfo, error) {
-	rolesBody, status, err := botDo("GET", discordAPI+"/guilds/"+guildID+"/roles", nil, botToken)
+	rolesBody, status, err := botDo("GET", discordAPI+"/guilds/"+url.PathEscape(guildID)+"/roles", nil, botToken)
 	if err != nil {
 		return DiscordPermissionInfo{}, err
 	}
@@ -156,7 +157,7 @@ func fetchDiscordEffectivePermissions(guildID, botUserID, botToken string) (Disc
 		return DiscordPermissionInfo{}, fmt.Errorf("Discord roles response was invalid")
 	}
 
-	memberBody, status, err := botDo("GET", discordAPI+"/guilds/"+guildID+"/members/"+botUserID, nil, botToken)
+	memberBody, status, err := botDo("GET", discordAPI+"/guilds/"+url.PathEscape(guildID)+"/members/"+url.PathEscape(botUserID), nil, botToken)
 	if err != nil {
 		return DiscordPermissionInfo{}, err
 	}
@@ -740,7 +741,7 @@ func checkDiscordStatusReadOnly(botToken, guildID string) (info DiscordStatusInf
 		return info
 	}
 
-	body, status, err = botDo("GET", discordAPI+"/guilds/"+guildID, nil, botToken)
+	body, status, err = botDo("GET", discordAPI+"/guilds/"+url.PathEscape(guildID), nil, botToken)
 	if err == nil && status == 200 {
 		var guild struct {
 			Name string `json:"name"`
@@ -876,11 +877,14 @@ func tryKitsuLogin(hostname, email, password string) (bool, string) {
 	if err != nil {
 		return false, connectionErrorClass(err)
 	}
-	token, _, err := AuthenticateKitsuCredentials(context.Background(), connection, email, password)
+	token, role, err := AuthenticateKitsuCredentials(context.Background(), connection, email, password)
 	if err != nil {
 		return false, connectionErrorClass(err)
 	}
-	return token != "", ""
+	if token == "" || !isStudioManagerOrHigher(role) {
+		return false, "auth_failed"
+	}
+	return true, ""
 }
 
 // --- Mapping API types ---

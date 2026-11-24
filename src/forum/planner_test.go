@@ -27,7 +27,7 @@ func newForumDB(t *testing.T) *gorm.DB {
 		&model.ForumFlapState{}, &model.ForumDMChannel{},
 		&model.ProductionForumConfig{}, &model.ProductionForumRoute{},
 		&model.ProductionForumStatusRole{}, &model.ProductionForumTag{},
-		&model.AdminException{}, &model.NotificationDecision{},
+		&model.StudioStatusPolicy{}, &model.NotificationDecision{}, &model.AdminException{}, &model.Project{}, &model.UserMap{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -64,9 +64,18 @@ func testSettings() model.ProductionForumSettings {
 	}
 }
 
+func testPolicies() map[string]model.StudioStatusPolicy {
+	return map[string]model.StudioStatusPolicy{
+		"s-wip":    {StatusID: "s-wip", StatusName: "WIP", Nature: model.StatusNatureWIP},
+		"s-wfa":    {StatusID: "s-wfa", StatusName: "WFA", Nature: model.StatusNatureReview},
+		"s-retake": {StatusID: "s-retake", StatusName: "RETAKE", Nature: model.StatusNatureRetake},
+		"s-done":   {StatusID: "s-done", StatusName: "DONE", Nature: model.StatusNatureDone},
+	}
+}
+
 func testPlanner(db *gorm.DB, now time.Time) Planner {
 	settings := testSettings()
-	return Planner{DB: db, Production: "prod-1", Settings: settings, Now: now}
+	return Planner{DB: db, Production: "prod-1", Settings: settings, Policies: testPolicies(), Now: now}
 }
 
 func taskInput(statusID, role string, assignees ...string) TaskInput {
@@ -613,5 +622,38 @@ func TestPlannerShotTitleUsesSequenceName(t *testing.T) {
 	}
 	if input.EntityKind != model.ForumEntityKindShot {
 		t.Errorf("entity kind = %q", input.EntityKind)
+	}
+}
+
+func TestPlannerManualStatusRoleOverridesDictionaryAndIgnoresProductionRows(t *testing.T) {
+	db := newForumDB(t)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	settings := testSettings()
+	// Per-production status-role rows must be ignored even if they disagree
+	// with the studio-wide policy or classify a status the studio left unset.
+	settings.StatusRoles = []model.ProductionForumStatusRole{
+		{ProductionID: "prod-1", StatusID: "s-rejected", StatusName: "Rejected", Role: model.ForumRoleWFA},
+		{ProductionID: "prod-1", StatusID: "s-only-prod", StatusName: "OnlyProd", Role: model.ForumRoleDone},
+	}
+	planner := Planner{
+		DB:         db,
+		Production: "prod-1",
+		Settings:   settings,
+		Policies: map[string]model.StudioStatusPolicy{
+			"s-rejected": {StatusID: "s-rejected", StatusName: "Rejected", Nature: model.StatusNatureRetake, Manual: true},
+		},
+		Now: now,
+	}
+	if got := planner.NatureForStatus("s-rejected"); got != model.StatusNatureRetake {
+		t.Fatalf("NatureForStatus = %q, want %q", got, model.StatusNatureRetake)
+	}
+	if got := planner.RoleForStatus("s-rejected"); got != model.ForumRoleRetake {
+		t.Fatalf("RoleForStatus = %q, want %q", got, model.ForumRoleRetake)
+	}
+	if got := planner.NatureForStatus("s-only-prod"); got != "" {
+		t.Fatalf("NatureForStatus(s-only-prod) = %q, want empty (per-production rows must be ignored)", got)
+	}
+	if got := planner.RoleForStatus("s-only-prod"); got != "" {
+		t.Fatalf("RoleForStatus(s-only-prod) = %q, want empty (per-production rows must be ignored)", got)
 	}
 }

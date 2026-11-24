@@ -109,7 +109,7 @@ func seedHandoffTemplate(db *gorm.DB, productionID string) error {
 	}
 	settings := model.ProductionHandoffSettings{Config: model.ProductionHandoffConfig{
 		ProductionID: productionID,
-		NoAssignee:   model.HandoffFallbackAdmin,
+		NoAssignee:   model.HandoffFallbackDisabled,
 	}}
 	return model.SaveProductionHandoffSettings(db, settings)
 }

@@ -154,17 +154,10 @@ func forumDigestRecipients(db *gorm.DB, project model.Project, settings model.Pr
 		return nil, err
 	}
 	startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, jst)
-	// The unresolved-turn roles come from the studio status policies
-	// (redesign core v2); the per-Production mapping is only the fallback
-	// for statuses the studio has not classified yet.
+	// The unresolved-turn roles come solely from the studio-wide status policies.
 	roleByStatus := map[string]string{}
 	if policies, err := model.LoadStudioStatusPolicies(db); err == nil {
 		roleByStatus = model.StatusPolicyRoles(policies)
-	}
-	for _, row := range settings.StatusRoles {
-		if _, ok := roleByStatus[row.StatusID]; !ok {
-			roleByStatus[row.StatusID] = row.Role
-		}
 	}
 	// Reviewers are resolved per Task Type: a person only reviews the Task
 	// Types they are a reviewer for, and the automatic supervisors of a Task

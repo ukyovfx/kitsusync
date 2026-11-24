@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -88,6 +89,14 @@ type interactionResponse struct {
 // verifyDiscordInteractionSignature checks Discord's Ed25519 signature over
 // timestamp+body against the application's public key (hex).
 func verifyDiscordInteractionSignature(publicKeyHex, signatureHex, timestamp string, body []byte) bool {
+	unixTS, err := strconv.ParseInt(timestamp, 10, 64)
+	if err != nil {
+		return false
+	}
+	delta := time.Now().UTC().Sub(time.Unix(unixTS, 0).UTC())
+	if delta < -5*time.Minute || delta > 5*time.Minute {
+		return false
+	}
 	publicKey, err := hex.DecodeString(strings.TrimSpace(publicKeyHex))
 	if err != nil || len(publicKey) != ed25519.PublicKeySize {
 		return false

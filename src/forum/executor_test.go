@@ -117,6 +117,11 @@ func seedForumSettings(t *testing.T, db *gorm.DB) {
 			t.Fatalf("create tag: %v", err)
 		}
 	}
+	for _, policy := range testPolicies() {
+		if err := db.Create(&policy).Error; err != nil {
+			t.Fatalf("create studio status policy: %v", err)
+		}
+	}
 }
 
 func seedForumTask(t *testing.T, db *gorm.DB, threadID, statusID string) {

@@ -437,8 +437,15 @@ func TestCurrentIADiscordDeleteRequiresConfirmationAndRemovesProductionOnSuccess
 		t.Fatal(err)
 	}
 
+	tok, err := newRecentlyAuthenticatedSessionTokenChecked("admin@example.test", "kitsu-token", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = destroySession(tok) })
+
 	request := httptest.NewRequest(http.MethodPost, "/bot/admin/projects?lang=en", strings.NewReader("action=execute_current_ia_discord_delete&project_id=current-delete-p&confirm_text=wrong"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: tok})
 	response := httptest.NewRecorder()
 	AdminProjectsHandler(db, "", "")(response, request)
 	if response.Code != http.StatusSeeOther {
@@ -453,6 +460,7 @@ func TestCurrentIADiscordDeleteRequiresConfirmationAndRemovesProductionOnSuccess
 
 	request = httptest.NewRequest(http.MethodPost, "/bot/admin/projects?lang=en", strings.NewReader("action=execute_current_ia_discord_delete&project_id=current-delete-p&confirm_text=DELETE"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: tok})
 	response = httptest.NewRecorder()
 	AdminProjectsHandler(db, "", "")(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Deletion complete") {
@@ -1129,30 +1137,18 @@ func TestProductionNotificationLanguageSaveIsProductionScoped(t *testing.T) {
 	}
 }
 
-func TestVisibilityAndAuditTablesCollapseToLabeledCardsOnMobile(t *testing.T) {
+func TestAuditTableCollapsesToLabeledCardsOnMobile(t *testing.T) {
 	db := newIAViewDB(t)
-	db.Create(&model.Project{KitsuProjectID: "visibility-p", Name: "VeryLongProductionNameForMobile"})
 	model.WriteAuditLog(db, model.AuditLog{ProjectName: "VeryLongProductionNameForMobile", EntityName: "Storyboard", Success: true})
-	visibility := renderProductionVisibilitySection("en", httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db)
 	auditPage := httptest.NewRecorder()
 	renderIAAudit(auditPage, httptest.NewRequest("GET", "/bot/admin/audit?lang=en", nil), db)
-	for name, body := range map[string]string{
-		"visibility": visibility,
-		"audit":      auditPage.Body.String(),
-	} {
-		if !strings.Contains(body, `<table class="mobile-card-table">`) && !strings.Contains(body, `class="data-table mobile-card-table"`) {
-			t.Fatalf("%s table is missing the mobile card class", name)
-		}
-		var cells []string
-		if name == "visibility" {
-			cells = []string{`class="mobile-card-lead"><span class="mobile-card-lead-label" data-label="Production">`, `data-label="Visible to bot"`, `data-label="Task count"`, `data-label="Last polling success"`}
-		} else {
-			cells = []string{`data-label="Date and time"`, `data-label="Production"`, `data-label="Action"`, `data-label="Acting user"`, `data-label="Result"`}
-		}
-		for _, cell := range cells {
-			if !strings.Contains(body, cell) {
-				t.Fatalf("%s table cell lost its mobile label %s", name, cell)
-			}
+	body := auditPage.Body.String()
+	if !strings.Contains(body, `<table class="mobile-card-table">`) && !strings.Contains(body, `class="data-table mobile-card-table"`) {
+		t.Fatalf("audit table is missing the mobile card class")
+	}
+	for _, cell := range []string{`data-label="Date and time"`, `data-label="Production"`, `data-label="Action"`, `data-label="Acting user"`, `data-label="Result"`} {
+		if !strings.Contains(body, cell) {
+			t.Fatalf("audit table cell lost its mobile label %s", cell)
 		}
 	}
 	for _, rule := range []string{

@@ -71,8 +71,8 @@ func TestReconcileStudioStatusPolicies(t *testing.T) {
 		t.Fatalf("mystery nature = %q", policies["s-mystery"].Nature)
 	}
 	open, err := OpenAdminExceptions(db)
-	if err != nil || len(open) != 1 || open[0].Kind != ExceptionStatusAmbiguous || open[0].SubjectID != "s-mystery" {
-		t.Fatalf("exceptions = %+v err=%v", open, err)
+	if err != nil || len(open) != 0 {
+		t.Fatalf("expected no admin exceptions for ambiguous status, got %+v err=%v", open, err)
 	}
 
 	// A rename Done -> Approved keeps the nature, so the snapshot just moves.
@@ -84,23 +84,17 @@ func TestReconcileStudioStatusPolicies(t *testing.T) {
 		t.Fatalf("after harmless rename: %+v", policies["s-done"])
 	}
 
-	// A rename Done -> Retake would change the nature: queued, not applied.
+	// A rename Done -> Retake updates the auto-derived nature without queueing an exception.
 	if err := ReconcileStudioStatusPolicies(db, []StatusInfo{{ID: "s-done", Name: "Retake"}}); err != nil {
 		t.Fatal(err)
 	}
 	policies, _ = LoadStudioStatusPolicies(db)
-	if policies["s-done"].Nature != StatusNatureDone {
-		t.Fatalf("nature changed silently: %+v", policies["s-done"])
+	if policies["s-done"].Nature != StatusNatureRetake {
+		t.Fatalf("nature not updated on auto-derived rename: %+v", policies["s-done"])
 	}
 	open, _ = OpenAdminExceptions(db)
-	found := false
-	for _, item := range open {
-		if item.Kind == ExceptionStatusRenamed && item.SubjectID == "s-done" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("rename exception missing: %+v", open)
+	if len(open) != 0 {
+		t.Fatalf("unexpected exceptions after rename: %+v", open)
 	}
 
 	// A manual classification is never re-derived.

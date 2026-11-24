@@ -55,7 +55,7 @@ const shot = name => path.join(outDir, name);
   if (await studioForm.count() !== 1) fail(`expected exactly one studio routes form, got ${await studioForm.count()}`);
   const studioHeading = (await studioForm.locator('section.section-card > h2').allTextContents()).map(text => text.trim());
   console.log(`studio headings: ${JSON.stringify(studioHeading)}`);
-  if (!studioHeading.includes('受け渡しの配線（スタジオ共通）')) fail(`studio section heading missing: ${JSON.stringify(studioHeading)}`);
+  if (!studioHeading.includes('受け渡しの配線')) fail(`studio section heading missing: ${JSON.stringify(studioHeading)}`);
   await noHorizontalScroll('bot');
 
   const studioTable = studioForm.locator('table.handoff-routes');
@@ -85,7 +85,7 @@ const shot = name => path.join(outDir, name);
   // and wait for the saved redirect back to the connection settings page.
   await openDetails(studioRow('tt-render'));
   await studioRow('tt-render').locator('input[name="st_notify_tt-render"][value="tt-anim"]').check();
-  const studioSaved = page.waitForURL(u => u.pathname === '/bot/admin/bot' && u.searchParams.get('msg') === 'saved', { waitUntil: 'load', timeout: 15000 });
+  const studioSaved = page.waitForURL(u => u.pathname === '/bot/admin/bot/wiring' && u.searchParams.get('msg') === 'saved', { waitUntil: 'load', timeout: 15000 });
   await studioForm.locator('button[type="submit"]').click();
   await studioSaved;
 

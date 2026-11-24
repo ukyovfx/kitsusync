@@ -448,6 +448,10 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 			}
 			action := strings.TrimSpace(r.FormValue("action"))
 			projectID := strings.TrimSpace(r.FormValue("project_id"))
+			if action == "save_team_links" {
+				http.Redirect(w, r, saveTeamUserLinks(db, r, botToken), http.StatusSeeOther)
+				return
+			}
 			redirectURL := withLang("/bot/admin/projects", r)
 			if projectID != "" {
 				redirectURL += "&project=" + url.QueryEscape(projectID)
@@ -466,6 +470,13 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				}
 				http.Redirect(w, r, redirectURL+"&tab=notifications&msg=error", http.StatusSeeOther)
 				return
+			}
+			switch action {
+			case "execute_current_ia_discord_delete", "execute_validated_channel_delete", "complete_connection_cleanup", "remove_connection":
+				if !botEditAllowed(r) {
+					http.Redirect(w, r, recentBotAuthenticationLoginURL(r, lang), http.StatusSeeOther)
+					return
+				}
 			}
 			if action == "execute_current_ia_discord_delete" {
 				expected := t(lang, "削除", "DELETE")
@@ -666,7 +677,7 @@ func validateConnectedProductionChannelCandidates(lang string, project model.Pro
 		return nil, results, t(lang, "この runtime では Discord bot token が利用できないため、Discord 照合を実行できませんでした。", "Validation could not contact Discord because the bot token is unavailable in this runtime."), checks
 	}
 
-	body, status, err := botDo("GET", discordAPI+"/guilds/"+effectiveGuildID+"/channels", nil, trimmedToken)
+	body, status, err := botDo("GET", discordAPI+"/guilds/"+url.PathEscape(effectiveGuildID)+"/channels", nil, trimmedToken)
 	if err != nil {
 		for i := range results {
 			results[i].Reason = t(lang, "Skip: Discord から guild channel list を取得できませんでした。", "Skipped: failed to read the guild channel list from Discord.")
@@ -878,7 +889,7 @@ type managedDiscordChannelIdentity struct {
 
 func inspectManagedDiscordChannel(channelID, token string) (managedDiscordChannelIdentity, int, error) {
 	var identity managedDiscordChannelIdentity
-	body, status, err := botDo(http.MethodGet, discordAPI+"/channels/"+strings.TrimSpace(channelID), nil, token)
+	body, status, err := botDo(http.MethodGet, discordAPI+"/channels/"+url.PathEscape(strings.TrimSpace(channelID)), nil, token)
 	if err != nil {
 		return identity, status, err
 	}
@@ -1280,9 +1291,6 @@ func HealthHandler(db *gorm.DB, pollInterval time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
-		if r.Method == http.MethodPost && handleAdminExceptionPost(db, w, r) {
-			return
-		}
 		if r.Method == http.MethodGet && r.URL.Query().Get("legacy") != "1" {
 			renderIAHealth(w, r, db, pollInterval)
 			return
@@ -1992,10 +2000,6 @@ func renderConnectionsDisplayBodyWithHealthRaw(lang string, r *http.Request, db 
 	} else if discordConfigured {
 		discordNote = t(lang, "Discord Botの接続を確認してください。", "Check the Discord Bot connection.")
 	}
-	extra := ""
-	if db != nil {
-		extra = renderStatusRolesDisplay(db, lang, r) + renderStudioRoutesDisplay(db, lang, r)
-	}
 	return `<div class="connections-summary-grid">` +
 		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><span class="status-pill ` + esc(kitsuStatus.Class) + `" role="status">` + esc(kitsuStatus.Label) + `</span></div>` +
 		`<label class="conn-field-label">` + esc(t(lang, "Kitsu Bot APIトークン", "Kitsu Bot API token")) + `</label>` + kitsuTokenBox +
@@ -2007,7 +2011,34 @@ func renderConnectionsDisplayBodyWithHealthRaw(lang string, r *http.Request, db 
 		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><span class="status-pill ` + esc(discordStatus.Class) + `" role="status">` + esc(discordStatus.Label) + `</span></div>` +
 		`<label class="conn-field-label">` + esc(t(lang, "Discord Botトークン", "Discord Bot Token")) + `</label>` + discordTokenBox +
 		`<p class="conn-note">` + esc(discordNote) + `</p></section>` +
-		`</div><div class="button-row connections-actions"><a class="btn" href="` + esc(editURL) + `">` + esc(t(lang, "接続設定を編集", "Edit connection settings")) + `</a><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(t(lang, "プロダクション一覧へ戻る", "Back to Productions")) + `</a></div>` + extra
+		`</div><div class="button-row connections-actions"><a class="btn" href="` + esc(editURL) + `">` + esc(t(lang, "接続設定を編集", "Edit connection settings")) + `</a><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(t(lang, "プロダクション一覧へ戻る", "Back to Productions")) + `</a></div>` +
+		renderConnectionsSubpageCards(lang, r)
+}
+
+func renderConnectionsSubpageCards(lang string, r *http.Request) string {
+	cards := []struct {
+		title, desc, href, action string
+	}{
+		{
+			title:  t(lang, "タスクステータス", "Task statuses"),
+			desc:   t(lang, "Kitsuのステータスを「確認待ち」「リテイク」「完了」「未割り当て」に割り当てます。", "Assign Kitsu task statuses to Waiting, Retake, Done, or Unassigned."),
+			href:   withLang("/bot/admin/bot/statuses", r),
+			action: t(lang, "タスクステータスを開く", "Open task statuses"),
+		},
+		{
+			title:  t(lang, "受け渡しの配線", "Handoff wiring"),
+			desc:   t(lang, "タスク完了時に次工程へ通知する基本の配線を設定します。", "Configure default handoff wiring between task types."),
+			href:   withLang("/bot/admin/bot/wiring", r),
+			action: t(lang, "受け渡しの配線を開く", "Open handoff wiring"),
+		},
+	}
+	var b strings.Builder
+	b.WriteString(`<div class="section-stack" style="margin-top:24px;">`)
+	for _, card := range cards {
+		b.WriteString(`<section class="section-card glass"><div class="page-heading"><div><h2>` + esc(card.title) + `</h2><p class="hint">` + esc(card.desc) + `</p></div><div class="button-row"><a class="btn" href="` + esc(card.href) + `">` + esc(card.action) + `</a></div></div></section>`)
+	}
+	b.WriteString(`</div>`)
+	return b.String()
 }
 
 func renderConnectionsDisplayBodyWithHealth(lang string, r *http.Request, db *gorm.DB, statusHint, statusClass, statusLabel, host, botToken string, kitsuHealthy, discordHealthy bool) string {
@@ -2212,9 +2243,46 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 		slog.Debug("BotHandler entered", "method", r.Method, "path", r.URL.Path)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
-		if r.Method == http.MethodGet && r.URL.Query().Get("legacy") != "1" && r.URL.Query().Get("edit") != "1" {
-			renderConnectionsPageSafeWithRuntime(w, r, db, runtimeHealthy)
+		path := strings.TrimRight(r.URL.Path, "/")
+		if strings.HasSuffix(path, "/connections") {
+			target := "/bot/admin/bot"
+			if r.URL.RawQuery != "" {
+				target += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, target, http.StatusSeeOther)
 			return
+		}
+		isStatusesSubpage := strings.HasSuffix(path, "/statuses")
+		isWiringSubpage := strings.HasSuffix(path, "/wiring")
+		if r.Method == http.MethodGet && r.URL.Query().Get("legacy") != "1" {
+			if isStatusesSubpage {
+				notice := ""
+				if r.URL.Query().Get("msg") == "saved" {
+					notice = `<div class="notice notice-success" role="status">` + esc(t(lang, "タスクステータスを保存しました。", "Task statuses saved.")) + `</div>`
+				}
+				content := renderStatusRolesSection(db, lang, r)
+				if content == "" {
+					content = `<section class="section-card glass"><p class="hint">` + esc(t(lang, "利用可能なステータスがありません。", "No task statuses are available.")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "接続設定へ戻る", "Back to Connections")) + `</a></div></section>`
+				}
+				fmt.Fprint(w, adminPage(lang, t(lang, "タスクステータス", "Task statuses"), r, `<div class="section-stack">`+notice+content+`</div>`))
+				return
+			}
+			if isWiringSubpage {
+				notice := ""
+				if r.URL.Query().Get("msg") == "saved" {
+					notice = `<div class="notice notice-success" role="status">` + esc(t(lang, "受け渡しの配線を保存しました。", "Handoff wiring saved.")) + `</div>`
+				}
+				content := renderStudioRoutesSection(db, lang, r)
+				if content == "" {
+					content = `<section class="section-card glass"><p class="hint">` + esc(t(lang, "利用可能なタスクタイプがありません。", "No task types are available.")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "接続設定へ戻る", "Back to Connections")) + `</a></div></section>`
+				}
+				fmt.Fprint(w, adminPage(lang, t(lang, "受け渡しの配線", "Handoff wiring"), r, `<div class="section-stack">`+notice+content+`</div>`))
+				return
+			}
+			if r.URL.Query().Get("edit") != "1" {
+				renderConnectionsPageSafeWithRuntime(w, r, db, runtimeHealthy)
+				return
+			}
 		}
 		effectiveHost := KitsuHostForUI(db)
 		editMode := r.URL.Query().Get("edit") == "1"
@@ -2244,19 +2312,19 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 			if action == "save_status_roles" {
 				if err := saveStatusRoles(db, r); err != nil {
 					w.WriteHeader(http.StatusBadRequest)
-					fmt.Fprint(w, adminPage(lang, t(lang, "Kitsuのステータス → 役割", "Kitsu status → role"), r, `<div class="section-stack"><div class="notice notice-error" role="alert"><strong>`+esc(t(lang, "保存できませんでした", "Could not save"))+`</strong>`+forumSaveErrorMarkup(lang, err, nil)+`</div></div>`))
+					fmt.Fprint(w, adminPage(lang, t(lang, "タスクステータス", "Task statuses"), r, `<div class="section-stack"><div class="notice notice-error" role="alert"><strong>`+esc(t(lang, "保存できませんでした", "Could not save"))+`</strong>`+forumSaveErrorMarkup(lang, err, nil)+`</div></div>`))
 					return
 				}
-				http.Redirect(w, r, withLang("/bot/admin/bot?edit=1", r)+"&msg=saved", http.StatusSeeOther)
+				http.Redirect(w, r, withLang("/bot/admin/bot/statuses", r)+"&msg=saved", http.StatusSeeOther)
 				return
 			}
 			if action == "save_studio_routes" {
 				if err := saveStudioRoutes(db, r); err != nil {
 					w.WriteHeader(http.StatusBadRequest)
-					fmt.Fprint(w, adminPage(lang, t(lang, "受け渡しの配線（スタジオ共通）", "Handoff wiring (studio default)"), r, `<div class="section-stack"><div class="notice notice-error" role="alert"><strong>`+esc(t(lang, "保存できませんでした", "Could not save"))+`</strong><p>`+esc(err.Error())+`</p></div></div>`))
+					fmt.Fprint(w, adminPage(lang, t(lang, "受け渡しの配線", "Handoff wiring"), r, `<div class="section-stack"><div class="notice notice-error" role="alert"><strong>`+esc(t(lang, "保存できませんでした", "Could not save"))+`</strong><p>`+esc(err.Error())+`</p></div></div>`))
 					return
 				}
-				http.Redirect(w, r, withLang("/bot/admin/bot?edit=1", r)+"&msg=saved", http.StatusSeeOther)
+				http.Redirect(w, r, withLang("/bot/admin/bot/wiring", r)+"&msg=saved", http.StatusSeeOther)
 				return
 			}
 			if action == "save_external_kitsu_url" {
@@ -2462,6 +2530,11 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					rejectPinnedKitsuEndpointChange(w, lang, "admin_legacy_save")
 					return
 				}
+				if !allowSetupProbe(r) {
+					w.WriteHeader(http.StatusTooManyRequests)
+					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "試行回数が多すぎます。1分ほど待ってから再試行してください。", "Too many attempts. Wait about a minute and try again.")))
+					return
+				}
 				if err := RecoverRuntimeCredentials(db, hostForAuth, runtimeEmail, runtimePassword); err != nil {
 					w.WriteHeader(http.StatusBadRequest)
 					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu接続を確認できませんでした。入力内容とKitsuの接続先を確認してください。", "Kitsu authentication could not be verified. Check the credentials and Kitsu endpoint.")+" ("+err.Error()+")"))
@@ -2550,8 +2623,6 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 		}
 		if editMode {
 			form := renderConnectionsEditFormWithHealth(lang, r, db, statusHint, statusClass, statusLabel, effectiveHost, kitsuHealthy, discordHealthy, discordStatus.BotName)
-			form += renderStatusRolesSection(db, lang, r)
-			form += renderStudioRoutesSection(db, lang, r)
 			fmt.Fprint(w, adminPage(lang, tr(lang, "connections.title"), r, form))
 			return
 		}

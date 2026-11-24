@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/gookit/slog"
@@ -26,7 +27,7 @@ func DeleteProject(kitsuProjectID, botToken string, db *gorm.DB) ([]string, erro
 	db.Where("kitsu_project_id = ?", kitsuProjectID).Find(&webhooks)
 	for _, wh := range webhooks {
 		if wh.DiscordChannelID != "" {
-			if _, status, err := botDo("DELETE", fmt.Sprintf("%s/channels/%s", discordAPI, wh.DiscordChannelID), nil, botToken); err != nil || status >= 400 {
+			if _, status, err := botDo("DELETE", fmt.Sprintf("%s/channels/%s", discordAPI, url.PathEscape(wh.DiscordChannelID)), nil, botToken); err != nil || status >= 400 {
 				logs = append(logs, "failed to delete #"+wh.ChannelName)
 			} else {
 				logs = append(logs, "deleted #"+wh.ChannelName)
@@ -36,7 +37,7 @@ func DeleteProject(kitsuProjectID, botToken string, db *gorm.DB) ([]string, erro
 
 	project := model.FindProjectByKitsuID(db, kitsuProjectID)
 	if project != nil && project.DiscordCategoryID != "" {
-		_, _, _ = botDo("DELETE", fmt.Sprintf("%s/channels/%s", discordAPI, project.DiscordCategoryID), nil, botToken)
+		_, _, _ = botDo("DELETE", fmt.Sprintf("%s/channels/%s", discordAPI, url.PathEscape(project.DiscordCategoryID)), nil, botToken)
 		logs = append(logs, "deleted category")
 	}
 
@@ -211,6 +212,11 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 			adminPassword := r.FormValue("admin_password")
 			if adminEmail == "" || adminPassword == "" {
 				fmt.Fprint(w, page(lang, t(lang, "管理者認証に失敗しました", "Admin authentication failed"), "#ff6a50", projectName, `<li>`+t(lang, "メールアドレスとパスワードを入力してください。", "Please enter email and password.")+`</li>`, `<a href="`+withLang("/bot/setup", r)+`">`+t(lang, "戻る", "Back")+`</a>`))
+				return
+			}
+			if !allowSetupProbe(r) {
+				w.WriteHeader(http.StatusTooManyRequests)
+				fmt.Fprint(w, page(lang, t(lang, "管理者認証に失敗しました", "Admin authentication failed"), "#ff6a50", projectName, `<li>`+t(lang, "試行回数が多すぎます。1分ほど待ってから再試行してください。", "Too many attempts. Wait about a minute and try again.")+`</li>`, `<a href="`+withLang("/bot/setup", r)+`">`+t(lang, "戻る", "Back")+`</a>`))
 				return
 			}
 			if err := authenticateDeleteAdmin(r.Context(), db, kitsuHost, adminEmail, adminPassword); err != nil {

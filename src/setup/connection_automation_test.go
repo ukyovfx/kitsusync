@@ -194,8 +194,8 @@ func TestNewProductionStartsWithHandoffTemplate(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("handoff settings: ok=%v err=%v", ok, err)
 	}
-	if settings.Config.NoAssignee != model.HandoffFallbackAdmin {
-		t.Fatalf("no-assignee default = %q, want admin", settings.Config.NoAssignee)
+	if settings.Config.NoAssignee != model.HandoffFallbackDisabled {
+		t.Fatalf("no-assignee default = %q, want none", settings.Config.NoAssignee)
 	}
 	if len(settings.Routes) != 0 || len(settings.ProductTypes) != 0 {
 		t.Fatalf("per-Production seed rows remain: routes=%d products=%d", len(settings.Routes), len(settings.ProductTypes))

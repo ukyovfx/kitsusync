@@ -178,14 +178,14 @@ func (w HandoffWatcher) fireEpisode(source kitsu.MessagePayload, transition mode
 	}
 
 	// The no-assignee handling comes from the Production's handoff config;
-	// an unconfigured Production falls back to the admins (operating model).
-	noAssignee := model.HandoffFallbackAdmin
+	// an unconfigured Production does not notify when nobody is assigned.
+	noAssignee := model.HandoffFallbackDisabled
 	fallbackUserID := ""
 	if handoffSettings, found, err := model.LoadProductionHandoffSettings(w.DB, productionID); err == nil && found {
 		noAssignee = handoffSettings.Config.NoAssignee
 		fallbackUserID = handoffSettings.Config.FallbackUserID
 		if noAssignee == "" {
-			noAssignee = model.HandoffFallbackAdmin
+			noAssignee = model.HandoffFallbackDisabled
 		}
 	}
 	for _, receiver := range receivers {

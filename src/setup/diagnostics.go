@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -296,7 +297,7 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 			checks = append(checks, diagCheck{Label: "Discord guild accessible", Status: "warn", Detail: blockedByMissingBotToken, Fix: configureBotSettingsFix})
 			checks = append(checks, diagCheck{Label: "Discord permissions (channels)", Status: "warn", Detail: blockedByMissingBotToken, Fix: configureBotSettingsFix})
 		} else {
-			_, status, err := botDo("GET", discordAPI+"/guilds/"+guildID, nil, botToken)
+			_, status, err := botDo("GET", discordAPI+"/guilds/"+url.PathEscape(guildID), nil, botToken)
 			if err != nil {
 				checks = append(checks, diagCheck{
 					Label:  "Discord guild accessible",
@@ -331,7 +332,7 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 				})
 			}
 
-			_, status, err = botDo("GET", discordAPI+"/guilds/"+guildID+"/channels", nil, botToken)
+			_, status, err = botDo("GET", discordAPI+"/guilds/"+url.PathEscape(guildID)+"/channels", nil, botToken)
 			if err != nil {
 				checks = append(checks, diagCheck{
 					Label:  "Discord permissions (channels)",
