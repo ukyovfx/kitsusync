@@ -417,20 +417,19 @@ func renderStudioRoutesSection(db *gorm.DB, lang string, r *http.Request) string
 		rows.WriteString(`<div class="route-item" data-route-item="` + esc(taskType.ID) + `">` +
 			`<div class="route-row" data-route-row="` + esc(taskType.ID) + `">` +
 			`<span class="route-src">` + esc(taskType.Name) + `</span>` +
+			`<div class="route-row-body">` +
 			`<span class="route-chips" data-route-chips>` + routeChipsStatic(state, namesByID, lang) + `</span>` +
-			`</div>` +
 			`<div class="route-editor" data-route-editor="` + esc(taskType.ID) + `" hidden>` +
 			`<div class="route-hidden-inputs" style="display:none">` + routeTargetCheckboxes("st_notify_", taskType.ID, taskTypes, state.selected) +
 			`<input type="checkbox" data-route-none name="st_none_` + esc(taskType.ID) + `" value="1"` + noneChecked + `></div>` +
-			`<div class="route-mode-row"><span class="route-mode-label">` + esc(t(lang, "受け渡しの状態", "Handoff mode")) + `</span>` +
-			`<div class="seg" role="group" aria-label="` + esc(t(lang, "受け渡しの状態", "Handoff mode")) + `">` +
+			`<div class="seg route-seg" role="group" aria-label="` + esc(t(lang, "受け渡しの状態", "Handoff mode")) + `">` +
 			`<button type="button" class="` + strings.TrimSpace(wiredSegClass) + `" data-route-mode="wired" aria-pressed="` + esc(fmt.Sprint(modeWired)) + `">` + esc(t(lang, "配線あり", "Wired")) + `</button>` +
 			`<button type="button" class="` + strings.TrimSpace(noneSegClass) + `" data-route-mode="none" aria-pressed="` + esc(fmt.Sprint(state.none)) + `">` + esc(t(lang, "受け渡しなし", "No handoff")) + `</button>` +
-			`</div></div>` +
+			`</div>` +
 			`<div class="route-targets-editor" data-route-targets-editor` + targetsEditorHidden + `>` +
-			`<div class="route-add-line"><span class="route-add-label">` + esc(t(lang, "行き先を追加", "Add destination")) + `</span><select data-route-add-select aria-label="` + esc(t(lang, "行き先を選ぶ", "Choose a destination")) + `">` + addOptions.String() + `</select>` +
+			`<div class="route-add-line"><select data-route-add-select aria-label="` + esc(t(lang, "行き先を選ぶ", "Choose a destination")) + `">` + addOptions.String() + `</select>` +
 			`<button type="button" class="btn sm" data-route-add>` + esc(t(lang, "追加", "Add")) + `</button></div></div>` +
-			`</div></div>`)
+			`</div></div></div></div>`)
 	}
 	return `<form method="post" action="` + esc(withLang("/bot/admin/bot/wiring", r)) + `" class="section-stack" data-route-editor-root data-none-label="` + esc(t(lang, "受け渡しなし", "No handoff")) + `" data-no-wiring-label="` + esc(t(lang, "配線なし", "No wiring")) + `">` +
 		`<input type="hidden" name="action" value="save_studio_routes">` +
@@ -564,17 +563,18 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 		}
 		overrideRows.WriteString(`<div class="handoff-override-row" data-ov-row="` + esc(taskType.ID) + `">` +
 			`<span class="src">` + esc(taskType.Name) + `</span>` +
+			`<div class="route-row-body">` +
 			modeSelect +
 			`<span class="inh" data-handoff-summary="inherit"` + inheritHidden + `>` + esc(t(lang, "（継承：", "(Inheriting: ")) + esc(inheritedSummary) + esc(t(lang, "）", ")")) + `</span>` +
 			`<span class="inh is-override" data-handoff-summary="none"` + noneHidden + `>` + esc(t(lang, "受け渡しなし（継承：", "No handoff (inherited: ")) + esc(inheritedSummary) + esc(t(lang, "）", ")")) + `</span>` +
 			`<span class="inh is-override route-chips" data-handoff-summary="custom" data-ov-chips` + customHidden + `>` + routeChipsStatic(studioRouteState{selected: overrideSelected}, namesByID, lang) + `</span>` +
-			`<button type="button" class="btn-ghost" data-ov-reset` + resetHidden + `>` + esc(t(lang, "解除", "Reset")) + `</button>` +
-			`</div>` +
 			`<div class="handoff-override-editor" data-ov-editor="` + esc(taskType.ID) + `"` + editorHidden + `>` +
 			`<div class="route-hidden-inputs" style="display:none">` + routeTargetCheckboxes("ov_notify_", taskType.ID, taskTypes, overrideSelected) + `</div>` +
 			`<div class="route-add-line"><select data-ov-add-select aria-label="` + esc(t(lang, "行き先を選ぶ", "Choose a destination")) + `">` + addOptions.String() + `</select>` +
 			`<button type="button" class="btn sm" data-ov-add>` + esc(t(lang, "追加", "Add")) + `</button></div>` +
-			`</div>`)
+			`</div>` +
+			`<button type="button" class="btn-ghost sm" data-ov-reset` + resetHidden + `>` + esc(t(lang, "解除", "Reset")) + `</button>` +
+			`</div></div>`)
 	}
 
 	fallbackOptionsList := make([][2]string, 0, len(handoffFallbackOptions))

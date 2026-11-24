@@ -162,6 +162,29 @@ func TestAdminButtonsHaveNoGlowBoxShadow(t *testing.T) {
 	}
 }
 
+func TestWiringEditRowsStayCompactWithoutCardBoxes(t *testing.T) {
+	css := adminThemeCSS
+	for _, forbidden := range []string{
+		".route-item.is-editing",
+		"padding:8px 0 14px 182px",
+		"padding:4px 0 12px 162px",
+	} {
+		if strings.Contains(css, forbidden) {
+			t.Fatalf("wiring edit mode CSS must not style rows as indented cards (%q)", forbidden)
+		}
+	}
+	stubHandoffTaskTypes(t, handoffTaskTypes())
+	db := newForumPageDB(t)
+	studioBody := studioRoutesSection(t, db)
+	if !strings.Contains(studioBody, `class="route-row-body"`) {
+		t.Fatal("studio wiring rows must use inline .route-row-body")
+	}
+	handoffBody := handoffGet(t, db).Body.String()
+	if !strings.Contains(handoffBody, `class="route-row-body"`) {
+		t.Fatal("handoff override rows must use inline .route-row-body")
+	}
+}
+
 func TestHandoffStudioRouteSaveStoresSelection(t *testing.T) {
 	stubHandoffTaskTypes(t, handoffTaskTypes())
 	db := newForumPageDB(t)
