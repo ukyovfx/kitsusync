@@ -112,10 +112,13 @@ func TestStudioRoutesSectionRendersOnConnectionSettings(t *testing.T) {
 	stubHandoffTaskTypes(t, handoffTaskTypes())
 	db := newForumPageDB(t)
 	body := studioRoutesSection(t, db)
-	for _, want := range []string{"Handoff wiring", `name="action" value="save_studio_routes"`, `name="st_notify_tt-lay"`, `name="st_none_tt-comp"`, `class="route-row"`, `data-route-row="tt-lay"`, "Add source task type", `data-route-source-select`, `data-route-source-add`, `data-route-mode="wired"`, `data-route-mode="none"`} {
+	for _, want := range []string{`id="studio-routes"`, `name="action" value="save_studio_routes"`, `name="st_notify_tt-lay"`, `name="st_none_tt-comp"`, `class="route-row"`, `data-route-row="tt-lay"`, "Add source task type", `data-route-source-select`, `data-route-source-add`, `data-route-mode="wired"`, `data-route-mode="none"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("studio section is missing %q", want)
 		}
+	}
+	if strings.Contains(body, "<h2>Handoff wiring</h2>") {
+		t.Fatalf("studio section must omit duplicate inner heading: %s", body)
 	}
 	// A Task Type is never offered as its own target.
 	if strings.Contains(body, `name="st_notify_tt-lay" value="tt-lay"`) {

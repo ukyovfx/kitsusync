@@ -1226,7 +1226,6 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .role-chip-static{padding:3px 10px}
   .role-tray{border:1px dashed rgba(255,255,255,.18);border-radius:10px;padding:12px;margin-top:12px}
   .role-tray-head{font-size:13px;font-weight:600;color:var(--muted-2);margin-bottom:10px}
-  .role-summary-line{font-size:12.5px;color:var(--muted);margin-top:8px}
   .route-item{border-bottom:1px solid var(--line)}
   .route-item.is-editing{background:rgba(255,255,255,.025);border:1px solid var(--line);border-radius:8px;padding:0 12px;margin:4px 0}
   .route-row{display:flex;align-items:flex-start;gap:12px;padding:10px 0}

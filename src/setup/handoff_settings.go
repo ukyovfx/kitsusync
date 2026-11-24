@@ -447,7 +447,7 @@ func renderStudioRoutesSection(db *gorm.DB, lang string, r *http.Request) string
 		`<button type="button" class="btn" data-route-source-add>` + esc(t(lang, "追加", "Add")) + `</button></div></div>`
 	return `<form method="post" action="` + esc(withLang("/bot/admin/bot/wiring", r)) + `" class="section-stack" data-route-editor-root data-none-label="` + esc(t(lang, "受け渡しなし", "No handoff")) + `" data-no-wiring-label="` + esc(t(lang, "配線なし", "No wiring")) + `" data-edit-label="` + esc(t(lang, "変更", "Edit")) + `" data-close-label="` + esc(t(lang, "閉じる", "Close")) + `">` +
 		`<input type="hidden" name="action" value="save_studio_routes">` +
-		`<section class="flat-section" id="studio-routes"><div class="flat-section-head"><h2>` + esc(t(lang, "受け渡しの配線", "Handoff wiring")) + `</h2></div>` +
+		`<section class="flat-section" id="studio-routes">` +
 		`<p class="field-help">` + esc(t(lang, "タスクが完了したとき、同じショット/アセットの次工程へ「進めていい」と伝える配線です。", "Wiring that tells the next task types on the same shot or asset they may proceed when a task finishes.")) + `</p>` +
 		rows.String() + addSource +
 		`<div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "接続設定トップへ戻る", "Back to Connections hub")) + `</a><button type="submit" class="btn">` + esc(t(lang, "保存", "Save")) + `</button></div></section></form>` + studioRoutesEditorScript

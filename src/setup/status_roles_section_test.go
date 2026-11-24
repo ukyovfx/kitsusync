@@ -35,13 +35,18 @@ func TestStatusRolesSectionPreFillsTemplate(t *testing.T) {
 	if err := model.SaveProductionForumSettings(db, settings); err != nil {
 		t.Fatalf("seed settings: %v", err)
 	}
-	r := httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang=en", nil)
+	r := httptest.NewRequest(http.MethodGet, "/bot/admin/bot/statuses?lang=en", nil)
 	body := renderStatusRolesSection(db, "en", r)
-	if !strings.Contains(body, "Task statuses") {
+	if !strings.Contains(body, `id="status-roles"`) {
 		t.Fatalf("section missing: %s", body)
 	}
 	if !strings.Contains(body, `name="srole_project" value="p1"`) {
 		t.Fatalf("section does not carry the production: %s", body)
+	}
+	for _, gone := range []string{"role-summary-line", "all three roles are assigned", "a role with no status is never notified", "<h2>Task statuses</h2>"} {
+		if strings.Contains(body, gone) {
+			t.Fatalf("section must omit %q: %s", gone, body)
+		}
 	}
 }
 
@@ -137,5 +142,70 @@ func TestBotHubHasNoEditFormsAndLinksToSubpages(t *testing.T) {
 	}
 	if strings.Contains(body, "<form") {
 		t.Fatalf("hub must not contain edit forms")
+	}
+}
+
+func TestBotSubpagesOmitDuplicateHeadingAndSummaryLine(t *testing.T) {
+	stubForumLookups(t, nil)
+	stubHandoffTaskTypes(t, handoffTaskTypes())
+	db := newForumPageDB(t)
+	settings := model.ProductionForumSettings{
+		Config: model.ProductionForumConfig{ProductionID: "p1", GuildID: "g1"},
+		Routes: []model.ProductionForumRoute{{ProductionID: "p1", TaskTypeID: "tt-comp", TaskTypeName: "Compositing", ForumChannelID: "f-comp"}},
+		Tags: []model.ProductionForumTag{
+			{ProductionID: "p1", ForumChannelID: "f-comp", Role: model.ForumRoleWFA, TagID: "t1"},
+			{ProductionID: "p1", ForumChannelID: "f-comp", Role: model.ForumRoleRetake, TagID: "t2"},
+			{ProductionID: "p1", ForumChannelID: "f-comp", Role: model.ForumRoleDone, TagID: "t3"},
+		},
+		StatusRoles: []model.ProductionForumStatusRole{
+			{StatusID: "s-wfa", StatusName: "Waiting For Approval", Role: model.ForumRoleWFA},
+			{StatusID: "s-retake", StatusName: "Retake", Role: model.ForumRoleRetake},
+			{StatusID: "s-done", StatusName: "Done", Role: model.ForumRoleDone},
+		},
+	}
+	if err := model.SaveProductionForumSettings(db, settings); err != nil {
+		t.Fatalf("seed settings: %v", err)
+	}
+
+	for _, tc := range []struct {
+		lang       string
+		title      string
+		goneStatus []string
+	}{
+		{"ja", "タスクステータス", []string{"<h2>タスクステータス</h2>", "role-summary-line", "3つの役割が揃っています", "未設定の役割は通知されません"}},
+		{"en", "Task statuses", []string{"<h2>Task statuses</h2>", "role-summary-line", "all three roles are assigned", "a role with no status is never notified"}},
+	} {
+		w := httptest.NewRecorder()
+		BotHandler(db, nil)(w, httptest.NewRequest(http.MethodGet, "/bot/admin/bot/statuses?lang="+tc.lang, nil))
+		body := w.Body.String()
+		if !strings.Contains(body, "<h1>"+tc.title+"</h1>") {
+			t.Fatalf("statuses (%s) missing page title %q", tc.lang, tc.title)
+		}
+		if !strings.Contains(body, `class="role-box"`) || !strings.Contains(body, `data-role-count`) {
+			t.Fatalf("statuses (%s) missing role boxes", tc.lang)
+		}
+		for _, gone := range tc.goneStatus {
+			if strings.Contains(body, gone) {
+				t.Fatalf("statuses (%s) must omit %q", tc.lang, gone)
+			}
+		}
+	}
+
+	for _, tc := range []struct {
+		lang  string
+		title string
+	}{
+		{"ja", "受け渡しの配線"},
+		{"en", "Handoff wiring"},
+	} {
+		w := httptest.NewRecorder()
+		BotHandler(db, nil)(w, httptest.NewRequest(http.MethodGet, "/bot/admin/bot/wiring?lang="+tc.lang, nil))
+		body := w.Body.String()
+		if !strings.Contains(body, "<h1>"+tc.title+"</h1>") {
+			t.Fatalf("wiring (%s) missing page title %q", tc.lang, tc.title)
+		}
+		if strings.Contains(body, "<h2>"+tc.title+"</h2>") {
+			t.Fatalf("wiring (%s) must omit duplicate inner heading", tc.lang)
+		}
 	}
 }

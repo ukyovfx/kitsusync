@@ -90,49 +90,6 @@ var speakingRoles = []struct {
 	{model.ForumRoleDone, "#4FAF78"},
 }
 
-func roleCountsOf(block statusRoleBlock) map[string]int {
-	counts := map[string]int{}
-	for _, status := range block.statuses {
-		counts[block.roleByStatus[status.id]]++
-	}
-	return counts
-}
-
-// roleSummaryLine renders the per-Production completeness line: the counts
-// per speaking role, and whether the set is complete. A speaking role with
-// no status assigned can never fire, so a missing role is called out
-// instead of failing silently.
-func roleSummaryLine(lang string, block statusRoleBlock) string {
-	counts := roleCountsOf(block)
-	complete := true
-	var line strings.Builder
-	for i, speaking := range speakingRoles {
-		if i > 0 {
-			line.WriteString(` ・ `)
-		}
-		label := forumRoleLabel(lang, speaking.role)
-		// The mock's summary uses the short role names （確認待ち/リテイク/完了）.
-		switch speaking.role {
-		case model.ForumRoleWFA:
-			label = t(lang, "確認待ち", "Waiting")
-		case model.ForumRoleRetake:
-			label = t(lang, "リテイク", "Retake")
-		case model.ForumRoleDone:
-			label = t(lang, "完了", "Done")
-		}
-		line.WriteString(esc(label) + ` ` + esc(intLabel(counts[speaking.role], lang)))
-		if counts[speaking.role] == 0 {
-			complete = false
-		}
-	}
-	if complete {
-		line.WriteString(` — ` + esc(t(lang, "3つの役割が揃っています", "all three roles are assigned")))
-	} else {
-		line.WriteString(` — ` + esc(t(lang, "未設定の役割は通知されません", "a role with no status is never notified")))
-	}
-	return line.String()
-}
-
 func intLabel(n int, lang string) string {
 	return strings.TrimSpace(strconv.Itoa(n) + t(lang, "件", ""))
 }
@@ -205,7 +162,6 @@ func renderStatusRolesSection(db *gorm.DB, lang string, r *http.Request) string 
 	for _, block := range blocks {
 		selectorLinks.WriteString(`<a class="nav-chip" href="#srole-` + esc(block.productionID) + `">` + esc(block.name) + `</a>`)
 		body.WriteString(`<h3 id="srole-` + esc(block.productionID) + `">` + esc(block.name) + `</h3>`)
-		body.WriteString(`<p class="role-summary-line">` + roleSummaryLine(lang, block) + `</p>`)
 		body.WriteString(renderRoleBoxes(lang, block, roleOptions, true))
 	}
 	note := ""
@@ -218,7 +174,7 @@ func renderStatusRolesSection(db *gorm.DB, lang string, r *http.Request) string 
 	}
 	return `<form method="post" action="` + esc(withLang("/bot/admin/bot/statuses", r)) + `" class="section-stack">` +
 		`<input type="hidden" name="action" value="save_status_roles">` +
-		`<section class="flat-section" id="status-roles"><div class="flat-section-head"><h2>` + esc(t(lang, "タスクステータス", "Task statuses")) + `</h2></div>` +
+		`<section class="flat-section" id="status-roles">` +
 		note + selector + body.String() +
 		`<div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "接続設定トップへ戻る", "Back to Connections hub")) + `</a><button type="submit" class="btn">` + esc(t(lang, "保存", "Save")) + `</button></div></section></form>` + statusRolesEditorScript
 }
