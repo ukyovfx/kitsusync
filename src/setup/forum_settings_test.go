@@ -402,8 +402,8 @@ func TestForumSettingsStatusListFailureKeepsSavedStatusRoles(t *testing.T) {
 			t.Fatalf("saved status %s must stay in the Bot page section while Kitsu is unreachable", id)
 		}
 	}
-	if !strings.Contains(section, `<option value="done" selected>`) {
-		t.Fatal("saved roles must stay selected in the Bot page section")
+	if !strings.Contains(section, `data-role-box="done"`) || !strings.Contains(section, `data-role-chip="s-done"`) {
+		t.Fatal("saved roles must stay placed in their role boxes in the Bot page section")
 	}
 
 	// Submit the same values the page rendered.

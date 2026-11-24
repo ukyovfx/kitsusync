@@ -846,9 +846,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         // synthetic Kitsu service.
         const forumSavedHref = page.url();
         await page.goto(`${base}/bot/admin/bot/statuses?lang=${locale.lang}`, { waitUntil: 'networkidle' });
-        const wfaRoleSelect = page.locator('.role-chip').filter({ has: page.locator('input[name="srole_id"][value="status-wfa"]') }).locator('select[name="srole_role"]');
-        if (await wfaRoleSelect.count() !== 1) throw new Error(`Bot settings did not render the Waiting For Approval role row in ${locale.lang}`);
-        if (await wfaRoleSelect.inputValue() !== 'wfa') throw new Error(`Bot settings did not keep the Waiting For Approval WFA destination in ${locale.lang}`);
+        if (await page.locator('[data-role-box="wfa"] [data-role-chip="status-wfa"]').count() !== 1) throw new Error(`Bot settings did not keep the Waiting For Approval WFA destination in ${locale.lang}`);
+        if (await page.locator('[data-role-tray] select').count() !== 0) throw new Error(`Bot settings unassigned tray must not render per-status selects in ${locale.lang}`);
         if (!(await page.locator('input[name="srole_id"][value="status-wip"]').count())) throw new Error(`Bot settings fell back to saved statuses instead of the live Kitsu status list in ${locale.lang}`);
         await page.goto(forumSavedHref, { waitUntil: 'networkidle' });
         await page.screenshot({ path: path.join(output, `forum-settings-saved-${locale.lang}-${viewport.name}.png`), fullPage: true });
@@ -881,9 +880,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         // where the pre-fill is verified.
         await page.goto(`${base}/bot/admin/bot/statuses?lang=${locale.lang}`, { waitUntil: 'networkidle' });
         for (const [statusID, role] of [['status-wfa', 'wfa'], ['status-retake', 'retake'], ['status-done', 'done']]) {
-          const templateSelect = page.locator('.role-chip').filter({ has: page.locator(`input[name="srole_id"][value="${statusID}"]`) }).locator('select[name="srole_role"]');
-          if (await templateSelect.count() !== 1) throw new Error(`Bot settings did not render the ${statusID} role row after zero-touch setup in ${locale.lang}`);
-          if (await templateSelect.inputValue() !== role) throw new Error(`Bot settings did not pre-fill the ${statusID} template role in ${locale.lang}`);
+          if (await page.locator(`[data-role-box="${role}"] [data-role-chip="${statusID}"]`).count() !== 1) throw new Error(`Bot settings did not pre-fill the ${statusID} template role in ${locale.lang}`);
+          if (await page.locator(`[data-role-box="${role}"] select[data-role-add-select]`).count() !== 1 || await page.locator(`[data-role-box="${role}"] button[data-role-add]`).count() !== 1) throw new Error(`Bot settings missing box-side add control for ${role} in ${locale.lang}`);
         }
         await record(page, '/bot/admin/forum?project=reviewer-production&msg=forums_created', locale.lang, viewport.name, 'zero-touch forum setup', 'one press of the Bot auto-create button created a forum with tags per Task Type, applied the template status roles (verified on the Bot settings page) and saved');
         // Put the seeded routing back for the Notifications checks that follow.

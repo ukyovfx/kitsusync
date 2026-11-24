@@ -95,10 +95,12 @@ func intLabel(n int, lang string) string {
 }
 
 // renderRoleBoxes renders the three speaking-role boxes plus the
-// unassigned tray for one Production. In edit mode each status chip carries
-// its role select (the stored form contract is unchanged); in display mode
-// the chips are static.
-func renderRoleBoxes(lang string, block statusRoleBlock, roleOptions [][2]string, edit bool) string {
+// unassigned tray for one Production. In edit mode each box carries its own
+// add control (a select of unassigned statuses + add button) and each
+// assigned chip has a remove button; the hidden srole_* inputs remain the
+// single source of truth so the stored form contract is unchanged. In display
+// mode the chips are static.
+func renderRoleBoxes(lang string, block statusRoleBlock, edit bool) string {
 	byRole := map[string][]statusRoleEntry{}
 	var tray []statusRoleEntry
 	for _, status := range block.statuses {
@@ -110,18 +112,28 @@ func renderRoleBoxes(lang string, block statusRoleBlock, roleOptions [][2]string
 			tray = append(tray, status)
 		}
 	}
-	chip := func(status statusRoleEntry) string {
-		if !edit {
-			return `<span class="role-chip role-chip-static">` + esc(status.name) + `</span>`
-		}
-		return `<span class="role-chip" data-role-chip>` + esc(status.name) +
-			`<input type="hidden" name="srole_project" value="` + esc(block.productionID) + `">` +
-			`<input type="hidden" name="srole_id" value="` + esc(status.id) + `">` +
-			`<input type="hidden" name="srole_name" value="` + esc(status.name) + `">` +
-			forumSelect("srole_role", block.roleByStatus[status.id], roleOptions, t(lang, "未割り当て", "Unassigned")) + `</span>`
-	}
 	var b strings.Builder
-	b.WriteString(`<div class="role-boxes-group" data-role-boxes-group data-count-suffix="` + esc(t(lang, "件", "")) + `"><div class="role-boxes">`)
+	b.WriteString(`<div class="role-boxes-group" data-role-boxes-group data-count-suffix="` + esc(t(lang, "件", "")) + `">`)
+	if edit {
+		b.WriteString(`<div class="role-hidden-inputs" style="display:none">`)
+		for _, status := range block.statuses {
+			b.WriteString(`<span data-role-input="` + esc(status.id) + `">` +
+				`<input type="hidden" name="srole_project" value="` + esc(block.productionID) + `">` +
+				`<input type="hidden" name="srole_id" value="` + esc(status.id) + `">` +
+				`<input type="hidden" name="srole_name" value="` + esc(status.name) + `">` +
+				`<input type="hidden" name="srole_role" value="` + esc(block.roleByStatus[status.id]) + `">` +
+				`</span>`)
+		}
+		b.WriteString(`</div>`)
+	}
+	var unassignedOptions strings.Builder
+	if edit {
+		unassignedOptions.WriteString(`<option value="">` + esc(t(lang, "ステータスを選ぶ", "Choose a status")) + `</option>`)
+		for _, status := range tray {
+			unassignedOptions.WriteString(`<option value="` + esc(status.id) + `">` + esc(status.name) + `</option>`)
+		}
+	}
+	b.WriteString(`<div class="role-boxes">`)
 	for _, speaking := range speakingRoles {
 		label := forumRoleLabel(lang, speaking.role)
 		switch speaking.role {
@@ -133,36 +145,49 @@ func renderRoleBoxes(lang string, block statusRoleBlock, roleOptions [][2]string
 			label = t(lang, "完了", "Done")
 		}
 		b.WriteString(`<div class="role-box" data-role-box="` + esc(speaking.role) + `"><div class="role-box-head"><span class="dot" style="background:` + speaking.dot + `"></span>` + esc(label) + `<span class="cnt" data-role-count>` + esc(intLabel(len(byRole[speaking.role]), lang)) + `</span></div>`)
-		for _, status := range byRole[speaking.role] {
-			b.WriteString(chip(status))
+		if edit {
+			b.WriteString(`<div class="role-box-chips" data-role-chips>`)
+			for _, status := range byRole[speaking.role] {
+				b.WriteString(`<span class="role-chip" data-role-chip="` + esc(status.id) + `">` + esc(status.name) + `<button type="button" data-role-remove aria-label="` + esc(status.name) + `">×</button></span>`)
+			}
+			b.WriteString(`</div>`)
+			b.WriteString(`<div class="role-box-add"><select data-role-add-select aria-label="` + esc(label+": "+t(lang, "ステータスを選ぶ", "Choose a status")) + `">` + unassignedOptions.String() + `</select><button type="button" class="btn sm" data-role-add>` + esc(t(lang, "追加", "Add")) + `</button></div>`)
+		} else {
+			for _, status := range byRole[speaking.role] {
+				b.WriteString(`<span class="role-chip role-chip-static">` + esc(status.name) + `</span>`)
+			}
 		}
 		b.WriteString(`</div>`)
 	}
 	b.WriteString(`</div><div class="role-tray" data-role-tray><div class="role-tray-head">` + esc(t(lang, "未割り当て", "Unassigned")) + `</div>`)
-	for _, status := range tray {
-		b.WriteString(chip(status))
+	if edit {
+		b.WriteString(`<div class="role-tray-list" data-role-tray-list>`)
+		for _, status := range tray {
+			b.WriteString(`<span class="role-chip role-chip-static" data-role-tray-item="` + esc(status.id) + `">` + esc(status.name) + `</span>`)
+		}
+		b.WriteString(`</div>`)
+	} else {
+		for _, status := range tray {
+			b.WriteString(`<span class="role-chip role-chip-static">` + esc(status.name) + `</span>`)
+		}
 	}
 	b.WriteString(`</div></div>`)
 	return b.String()
 }
 
-const statusRolesEditorScript = `<script data-status-roles-editor>(function(){document.querySelectorAll("[data-role-boxes-group]").forEach(function(group){var suffix=group.getAttribute("data-count-suffix")||"";var tray=group.querySelector("[data-role-tray]");function updateCounts(){group.querySelectorAll("[data-role-box]").forEach(function(box){var cnt=box.querySelector("[data-role-count]");if(cnt){cnt.textContent=String(box.querySelectorAll("[data-role-chip]").length)+suffix}})}group.querySelectorAll("select[name=\"srole_role\"]").forEach(function(sel){sel.addEventListener("change",function(){var chip=sel.closest("[data-role-chip]");if(!chip)return;var target=group.querySelector("[data-role-box=\""+sel.value+"\"]")||tray;if(target){target.appendChild(chip);updateCounts()}})})})})();</script>`
+const statusRolesEditorScript = `<script data-status-roles-editor>(function(){document.querySelectorAll("[data-role-boxes-group]").forEach(function(group){var suffix=group.getAttribute("data-count-suffix")||"";var trayList=group.querySelector("[data-role-tray-list]");var inputs=Array.prototype.slice.call(group.querySelectorAll("[data-role-input]"));function rebuild(){var byRole={wfa:[],retake:[],done:[]};var unassigned=[];inputs.forEach(function(item){var id=item.getAttribute("data-role-input")||"";var nameInput=item.querySelector("input[name=\"srole_name\"]");var roleInput=item.querySelector("input[name=\"srole_role\"]");if(!roleInput)return;var entry={id:id,name:nameInput?nameInput.value:id,roleInput:roleInput};if(roleInput.value==="wfa"||roleInput.value==="retake"||roleInput.value==="done"){byRole[roleInput.value].push(entry)}else{unassigned.push(entry)}});group.querySelectorAll("[data-role-box]").forEach(function(box){var role=box.getAttribute("data-role-box")||"";var list=byRole[role]||[];var cnt=box.querySelector("[data-role-count]");if(cnt){cnt.textContent=String(list.length)+suffix}var chips=box.querySelector("[data-role-chips]");if(chips){chips.innerHTML="";list.forEach(function(entry){var chip=document.createElement("span");chip.className="role-chip";chip.setAttribute("data-role-chip",entry.id);chip.textContent=entry.name;var remove=document.createElement("button");remove.type="button";remove.setAttribute("data-role-remove","");remove.setAttribute("aria-label",entry.name);remove.textContent="×";remove.addEventListener("click",function(){entry.roleInput.value="";rebuild()});chip.appendChild(remove);chips.appendChild(chip)})}var select=box.querySelector("[data-role-add-select]");if(select){var first=select.querySelector("option[value=\"\"]");select.innerHTML="";if(first)select.appendChild(first);unassigned.forEach(function(entry){var option=document.createElement("option");option.value=entry.id;option.textContent=entry.name;select.appendChild(option)});select.value=""}});if(trayList){trayList.innerHTML="";unassigned.forEach(function(entry){var item=document.createElement("span");item.className="role-chip role-chip-static";item.setAttribute("data-role-tray-item",entry.id);item.textContent=entry.name;trayList.appendChild(item)})}}group.querySelectorAll("[data-role-box]").forEach(function(box){var role=box.getAttribute("data-role-box")||"";var select=box.querySelector("[data-role-add-select]");var add=box.querySelector("[data-role-add]");if(add&&select){add.addEventListener("click",function(){var id=select.value;if(!id)return;inputs.forEach(function(item){if(item.getAttribute("data-role-input")===id){var roleInput=item.querySelector("input[name=\"srole_role\"]");if(roleInput)roleInput.value=role}});rebuild()})}});rebuild()})})();</script>`
 
 func renderStatusRolesSection(db *gorm.DB, lang string, r *http.Request) string {
 	blocks, statusErr := statusRoleBlocks(db)
 	if len(blocks) == 0 {
 		return ""
 	}
-	roleOptions := make([][2]string, 0, len(forumRoleOptions))
-	for _, role := range forumRoleOptions {
-		roleOptions = append(roleOptions, [2]string{role, forumRoleLabel(lang, role)})
-	}
 	var body strings.Builder
 	var selectorLinks strings.Builder
 	for _, block := range blocks {
 		selectorLinks.WriteString(`<a class="nav-chip" href="#srole-` + esc(block.productionID) + `">` + esc(block.name) + `</a>`)
 		body.WriteString(`<h3 id="srole-` + esc(block.productionID) + `">` + esc(block.name) + `</h3>`)
-		body.WriteString(renderRoleBoxes(lang, block, roleOptions, true))
+		body.WriteString(renderRoleBoxes(lang, block, true))
 	}
 	note := ""
 	if statusErr != nil {
@@ -187,7 +212,7 @@ func renderStatusRolesDisplay(db *gorm.DB, lang string, r *http.Request) string 
 	if len(blocks) == 0 {
 		return ""
 	}
-	return `<section class="flat-section" aria-labelledby="status-roles-display-title"><div class="flat-section-head"><h2 id="status-roles-display-title">` + esc(t(lang, "タスクステータス", "Task statuses")) + `</h2><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot/statuses", r)) + `">` + esc(t(lang, "編集", "Edit")) + `</a></div>` + renderRoleBoxes(lang, blocks[0], nil, false) + `</section>`
+	return `<section class="flat-section" aria-labelledby="status-roles-display-title"><div class="flat-section-head"><h2 id="status-roles-display-title">` + esc(t(lang, "タスクステータス", "Task statuses")) + `</h2><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot/statuses", r)) + `">` + esc(t(lang, "編集", "Edit")) + `</a></div>` + renderRoleBoxes(lang, blocks[0], false) + `</section>`
 }
 
 // saveStatusRoles applies one bot-page submit to every Production it carries

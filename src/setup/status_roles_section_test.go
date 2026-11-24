@@ -43,10 +43,22 @@ func TestStatusRolesSectionPreFillsTemplate(t *testing.T) {
 	if !strings.Contains(body, `name="srole_project" value="p1"`) {
 		t.Fatalf("section does not carry the production: %s", body)
 	}
-	for _, gone := range []string{"role-summary-line", "all three roles are assigned", "a role with no status is never notified", "<h2>Task statuses</h2>"} {
+	for _, gone := range []string{"role-summary-line", "all three roles are assigned", "a role with no status is never notified", "<h2>Task statuses</h2>", `<select name="srole_role">`} {
 		if strings.Contains(body, gone) {
 			t.Fatalf("section must omit %q: %s", gone, body)
 		}
+	}
+	for _, want := range []string{`data-role-box="wfa"`, `data-role-box="retake"`, `data-role-box="done"`, `data-role-add-select`, `data-role-add`, `data-role-remove`, `data-role-tray-item="s-wip"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("section missing %q: %s", want, body)
+		}
+	}
+	if strings.Count(body, `<select data-role-add-select`) != 3 || strings.Count(body, `data-role-add>`) != 3 {
+		t.Fatalf("expected one add control per role box, got body: %s", body)
+	}
+	trayStart := strings.Index(body, `data-role-tray`)
+	if trayStart < 0 || strings.Contains(body[trayStart:], `<select`) {
+		t.Fatalf("unassigned tray must be a plain list with no select: %s", body)
 	}
 }
 
@@ -189,6 +201,12 @@ func TestBotSubpagesOmitDuplicateHeadingAndSummaryLine(t *testing.T) {
 		}
 		if !strings.Contains(body, `class="role-box"`) || !strings.Contains(body, `data-role-count`) {
 			t.Fatalf("statuses (%s) missing role boxes", tc.lang)
+		}
+		if strings.Count(body, `<select data-role-add-select`) != 3 || strings.Count(body, `data-role-add>`) != 3 {
+			t.Fatalf("statuses (%s) must have one add control per role box", tc.lang)
+		}
+		if strings.Contains(body, `<select name="srole_role">`) {
+			t.Fatalf("statuses (%s) must not render per-status role selects", tc.lang)
 		}
 		for _, gone := range tc.goneStatus {
 			if strings.Contains(body, gone) {

@@ -1217,13 +1217,18 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .connection-advanced-details>summary::-webkit-details-marker{display:none}
   .connection-advanced-details>summary .chev{color:var(--muted);font-weight:400}
   .role-boxes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:12px}
-  .role-box{border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.015);padding:12px;min-height:88px;min-width:0}
+  .role-box{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.015);padding:12px;min-height:88px;min-width:0}
   .role-box-head{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;margin-bottom:10px}
   .role-box-head .dot{width:8px;height:8px;border-radius:50%;flex:none}
   .role-box-head .cnt{margin-left:auto;color:var(--muted);font-size:12px;font-weight:400}
+  .role-box-chips{display:flex;flex-wrap:wrap;align-items:flex-start}
   .role-chip{display:inline-flex;align-items:center;gap:6px;margin:0 6px 6px 0;padding:3px 4px 3px 10px;border:1px solid var(--line);border-radius:6px;background:rgba(255,255,255,.03);font-size:12.5px;max-width:100%}
-  .role-chip select{height:24px;font-size:12px;padding:0 4px;width:auto}
+  .role-chip button{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;padding:0 3px;font-family:inherit;line-height:1}
+  .role-chip button:hover{color:var(--ink)}
   .role-chip-static{padding:3px 10px}
+  .role-box-add{display:flex;gap:6px;align-items:center;margin-top:auto;padding-top:8px}
+  .role-box-add select{flex:1;min-width:0;height:30px;font-size:12.5px}
+  .role-box-add .btn{flex:none;height:30px;padding:0 12px;font-size:12.5px}
   .role-tray{border:1px dashed rgba(255,255,255,.18);border-radius:10px;padding:12px;margin-top:12px}
   .role-tray-head{font-size:13px;font-weight:600;color:var(--muted-2);margin-bottom:10px}
   .route-item{border-bottom:1px solid var(--line)}
