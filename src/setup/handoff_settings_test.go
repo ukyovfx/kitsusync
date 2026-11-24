@@ -157,6 +157,20 @@ func TestHandoffStudioRouteSaveStoresSelection(t *testing.T) {
 	if !strings.Contains(body, `name="st_none_tt-comp" value="1" checked`) {
 		t.Fatal("saved no-handoff mark did not reload as checked")
 	}
+	// Target checkboxes must carry data-route-name so the client-side
+	// editor script renders task-type names instead of raw IDs.
+	for _, want := range []string{
+		`name="st_notify_tt-lay" value="tt-anim" checked data-route-name="Animation"`,
+		`name="st_notify_tt-lay" value="tt-comp" data-route-name="Compositing"`,
+		`data-route-name="Layout"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("studio editor markup is missing %q", want)
+		}
+	}
+	if !strings.Contains(body, `getAttribute("data-route-name")`) {
+		t.Fatal("studio editor script no longer reads data-route-name")
+	}
 	// A submit of the Production page must not touch the studio routes.
 	if w := handoffPost(t, db, productionForm()); w.Code != http.StatusSeeOther {
 		t.Fatalf("production save status = %d, body: %s", w.Code, w.Body.String())

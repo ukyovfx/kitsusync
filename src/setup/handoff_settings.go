@@ -318,7 +318,7 @@ func routeTargetCheckboxes(prefix, fromID string, taskTypes []kitsu.TaskType, se
 		if _, ok := chosen[taskType.ID]; ok {
 			checked = " checked"
 		}
-		b.WriteString(`<label class="checkbox-label"><input type="checkbox" name="` + esc(prefix+fromID) + `" value="` + esc(taskType.ID) + `"` + checked + `> ` + esc(taskType.Name) + `</label>`)
+		b.WriteString(`<label class="checkbox-label"><input type="checkbox" name="` + esc(prefix+fromID) + `" value="` + esc(taskType.ID) + `"` + checked + ` data-route-name="` + esc(taskType.Name) + `"> ` + esc(taskType.Name) + `</label>`)
 	}
 	return b.String()
 }
