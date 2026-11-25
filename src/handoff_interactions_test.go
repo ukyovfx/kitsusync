@@ -146,9 +146,16 @@ func okCustomID(rows []discord.ActionRow) string {
 func TestHandoffInteractionsAnswerPing(t *testing.T) {
 	db := handoffReplyDB(t, model.HandoffTimingMixed)
 	private := configureInteractionKey(t, db)
+	before := time.Now().UTC().Unix()
 	code, response := serveInteraction(t, db, private, []byte(`{"type":1}`))
 	if code != http.StatusOK || response.Type != interactionResponsePong {
 		t.Fatalf("code=%d response=%+v", code, response)
+	}
+	after := time.Now().UTC().Unix()
+	raw := model.GetSetting(db, setup.DiscordInteractionsLastPingAtSettingKey)
+	got, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || got < before || got > after {
+		t.Fatalf("expected recorded ping timestamp between %d and %d, got %q (err=%v)", before, after, raw, err)
 	}
 }
 
@@ -165,6 +172,9 @@ func TestHandoffInteractionsRejectUnverifiableCallbacks(t *testing.T) {
 	if code, _ := serveInteraction(t, db, otherPrivate, []byte(`{"type":1}`)); code != http.StatusUnauthorized {
 		t.Fatalf("wrong key: code=%d", code)
 	}
+	if got := model.GetSetting(db, setup.DiscordInteractionsLastPingAtSettingKey); got != "" {
+		t.Fatalf("invalid signature must not record ping timestamp, got %q", got)
+	}
 
 	timestamp := strconv.FormatInt(time.Now().UTC().Unix(), 10)
 	body := []byte(`{"type":1}`)
@@ -176,10 +186,16 @@ func TestHandoffInteractionsRejectUnverifiableCallbacks(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("tampered body: code=%d", rec.Code)
 	}
+	if got := model.GetSetting(db, setup.DiscordInteractionsLastPingAtSettingKey); got != "" {
+		t.Fatalf("tampered body must not record ping timestamp, got %q", got)
+	}
 
 	model.DeleteSetting(db, setup.DiscordApplicationPublicKeySettingKey)
 	if code, _ := serveInteraction(t, db, private, []byte(`{"type":1}`)); code != http.StatusUnauthorized {
 		t.Fatalf("no key configured: code=%d", code)
+	}
+	if got := model.GetSetting(db, setup.DiscordInteractionsLastPingAtSettingKey); got != "" {
+		t.Fatalf("missing key must not record ping timestamp, got %q", got)
 	}
 }
 

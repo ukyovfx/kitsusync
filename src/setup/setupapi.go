@@ -60,6 +60,7 @@ type KitsuStatusInfo struct {
 type DiscordStatusInfo struct {
 	Configured  bool                  `json:"configured"`
 	BotValid    bool                  `json:"bot_valid"`
+	BotID       string                `json:"bot_id,omitempty"`
 	BotName     string                `json:"bot_name,omitempty"`
 	GuildValid  bool                  `json:"guild_valid"`
 	GuildName   string                `json:"guild_name,omitempty"`
@@ -698,6 +699,7 @@ func checkDiscordStatusReadOnly(botToken, guildID string) (info DiscordStatusInf
 			}
 			if json.Unmarshal(body, &me) == nil && strings.TrimSpace(me.ID) != "" {
 				info.BotValid = true
+				info.BotID = strings.TrimSpace(me.ID)
 				info.BotName = me.Username
 				return info
 			}
@@ -728,6 +730,7 @@ func checkDiscordStatusReadOnly(botToken, guildID string) (info DiscordStatusInf
 		}
 		if json.Unmarshal(body, &me) == nil {
 			botUserID = me.ID
+			info.BotID = strings.TrimSpace(me.ID)
 			info.BotName = me.Username
 		}
 		info.BotValid = true

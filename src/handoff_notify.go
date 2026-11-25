@@ -186,11 +186,11 @@ func handoffReplyCustomID(eventID uint) string {
 
 // handoffRepliesWired reports whether button presses are received. The
 // /interactions endpoint verifies callbacks with the Discord application's
-// public key, so replies are wired exactly when that key is configured:
-// without it the endpoint rejects every callback and an enabled button
-// would be a dead button.
+// public key, and internal operation has no public route for Discord to reach,
+// so replies are wired only when the public key is configured and the
+// operation pattern is not internal.
 func handoffRepliesWired(db *gorm.DB) bool {
-	return setup.DiscordApplicationPublicKey(db) != ""
+	return setup.DiscordApplicationPublicKey(db) != "" && setup.AppOperationPattern(db) != setup.OperationPatternInternal
 }
 
 // handoffTaskURL links the receiving task of a handoff in Kitsu.

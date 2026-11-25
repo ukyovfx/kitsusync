@@ -195,7 +195,7 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	if !strings.Contains(body, `name="kitsu_hostname"`) {
 		t.Fatal("expected a named Kitsu hostname field")
 	}
-	for _, want := range []string{`name="kitsu_external_url"`, `id="external-kitsu-url-form"`, `name="action" value="save_external_kitsu_url"`, "External Kitsu URL (for links)", "Used for links in Discord notifications.", "Check link", "Save"} {
+	for _, want := range []string{`name="kitsu_external_url"`, `id="external-kitsu-url-form"`, `name="action" value="save_external_kitsu_url"`, "Kitsu address (for notification links)", "Used for links in Discord notifications.", "Check link", "Save"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("external Kitsu URL field missing %q", want)
 		}
@@ -223,8 +223,8 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	if !strings.Contains(body, `name="bot_token"`) {
 		t.Fatal("expected the Discord Bot token field")
 	}
-	if got := strings.Count(body, `<form method="POST"`); got != 3 {
-		t.Fatalf("expected three independent save forms, got %d", got)
+	if got := strings.Count(body, `<form method="POST"`); got != 5 {
+		t.Fatalf("expected five independent save forms, got %d", got)
 	}
 	if !strings.Contains(body, `id="kitsu-connection-form"`) || !strings.Contains(body, `form="kitsu-connection-form"`) {
 		t.Fatal("specialist Kitsu fields must remain associated with the Kitsu save form")
@@ -241,8 +241,8 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	if strings.Contains(body, `name="kitsu_bot_token" value=`) || strings.Contains(body, `name="bot_token" value=`) {
 		t.Fatal("did not expect stored secrets in rendered fields")
 	}
-	if strings.Count(body, `class="connection-save-form"`) != 2 || !strings.Contains(body, `id="external-kitsu-url-form"`) {
-		t.Fatal("expected exactly three independent save-form boundaries")
+	if strings.Count(body, `class="connection-save-form"`) != 3 || !strings.Contains(body, `id="external-kitsu-url-form"`) || !strings.Contains(body, `id="operation-pattern-form"`) || !strings.Contains(body, `id="discord-receiver-form"`) {
+		t.Fatal("expected five independent save-form boundaries")
 	}
 	if strings.Contains(body, "Kitsu Runtime") || strings.Contains(body, "Runtime email") || strings.Contains(body, "Runtime password") || strings.Contains(body, "Legacy fallback") {
 		t.Fatal("did not expect internal Runtime terminology in the edit form")
@@ -540,7 +540,7 @@ func TestConnectionsDisplayUsesSharedFieldRows(t *testing.T) {
 	if strings.Contains(body, "host.docker.internal") || strings.Contains(body, "&lt;span") || strings.Contains(body, "<span class=\"status-pill bad\">対応が必要</span>") {
 		t.Fatal("did not expect internal endpoint or literal status markup")
 	}
-	if !strings.Contains(body, "Kitsu Bot APIトークン") || !strings.Contains(body, "外部 Kitsu URL（リンク用）") || !strings.Contains(body, "Discord Botトークン") {
+	if !strings.Contains(body, "Kitsu Bot APIトークン") || !strings.Contains(body, "Kitsu のアドレス（通知リンク用）") || !strings.Contains(body, "Discord Botトークン") {
 		t.Fatal("normal Connections view is missing the canonical safe field labels")
 	}
 }

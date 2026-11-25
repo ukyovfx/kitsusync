@@ -2211,3 +2211,44 @@ func TestCurrentProductionUsersHideEmptyCheckerAssignmentList(t *testing.T) {
 		t.Fatalf("empty Reviewer / Checker assignment list was rendered: %s", body)
 	}
 }
+
+func TestConnectionsPageUsesCardCompositionAndHorizontalReceiverBand(t *testing.T) {
+	db := newSetupStateTestDB(t)
+	viewBody := renderConnectionsDisplayBodyWithHealth("ja", httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil), db, "", "ok", "接続済み", "https://kitsu.example.test", "configured-token", true, true)
+	if strings.Contains(viewBody, `connections-page`) {
+		t.Fatal("connections view mode must not keep flat .connections-page override wrapper")
+	}
+	if !strings.Contains(viewBody, `class="section-card glass connections-card connections-pattern-band"`) {
+		t.Fatalf("connections view mode missing slim pattern band card: %s", viewBody)
+	}
+	if !strings.Contains(viewBody, `class="section-card glass connections-card connections-receiver-section" id="button-receiver-section"`) {
+		t.Fatalf("connections view mode missing full-width receiver card: %s", viewBody)
+	}
+	editBody := renderConnectionsEditFormWithHealth("ja", httptest.NewRequest("GET", "/bot/admin/bot?edit=1&lang=ja", nil), db, "", "ok", "接続済み", "https://kitsu.example.test", true, true, "Test Bot")
+	if strings.Contains(editBody, `connections-page`) {
+		t.Fatal("connections edit mode must not keep flat .connections-page override class")
+	}
+	if !strings.Contains(editBody, `id="operation-pattern-form" class="section-card glass connections-card connections-pattern-band"`) {
+		t.Fatalf("connections edit mode missing slim pattern band card: %s", editBody)
+	}
+	if !strings.Contains(editBody, `<div class="connections-receiver-fields-grid">`) {
+		t.Fatalf("connections edit mode missing horizontal receiver fields grid: %s", editBody)
+	}
+	for _, want := range []string{
+		`.editorial-workbench .connections-pattern-band{border-radius:8px;padding:12px 16px;background:var(--surface-subtle);border-color:rgba(255,255,255,.14);box-shadow:inset 0 1px 0 rgba(255,255,255,.045);margin-bottom:16px}`,
+		`.editorial-workbench .connections-receiver-section{border-radius:8px;padding:14px;background:var(--surface-subtle);border-color:rgba(255,255,255,.14);box-shadow:inset 0 1px 0 rgba(255,255,255,.045);margin-top:16px}`,
+		`.editorial-workbench .connections-receiver-fields-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start;margin-bottom:10px}`,
+	} {
+		if !strings.Contains(adminThemeCSS, want) {
+			t.Fatalf("adminThemeCSS missing restored card/band rule %q", want)
+		}
+	}
+	for _, unwanted := range []string{
+		`.page-card.editorial-workbench:has(.connections-page)`,
+		`.editorial-workbench .connections-page .status-pill`,
+	} {
+		if strings.Contains(adminThemeCSS, unwanted) {
+			t.Fatalf("adminThemeCSS still contains reverted flat rule %q", unwanted)
+		}
+	}
+}

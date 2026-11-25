@@ -1268,6 +1268,17 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .editorial-workbench .connection-external-url-controls .btn,.editorial-workbench .connection-external-url-controls .btn-ghost{flex:0 0 auto;width:auto;white-space:nowrap}
   .system-status-sections .system-observability-grid{margin-top:var(--system-status-heading-to-content)}
   @media(max-width:760px){.role-boxes{grid-template-columns:1fr}.route-row,.handoff-override-row{flex-direction:column;gap:6px}.route-row .route-src,.handoff-override-row .src{width:auto;padding-top:0}.route-editor,.handoff-override-editor{margin-left:0}.conn-kvrow{flex-direction:column;align-items:flex-start}.conn-kvrow .v{text-align:left}}
+  /* Connection settings (/bot/admin/bot): slim operation-pattern band & wide horizontal receiver band matching connection cards. */
+  .editorial-workbench .connections-pattern-band{border-radius:8px;padding:12px 16px;background:var(--surface-subtle);border-color:rgba(255,255,255,.14);box-shadow:inset 0 1px 0 rgba(255,255,255,.045);margin-bottom:16px}
+  .editorial-workbench .connections-edit-stack .connections-pattern-band{margin-bottom:0}
+  .editorial-workbench .connections-receiver-section{border-radius:8px;padding:14px;background:var(--surface-subtle);border-color:rgba(255,255,255,.14);box-shadow:inset 0 1px 0 rgba(255,255,255,.045);margin-top:16px}
+  .editorial-workbench .connections-edit-stack .connections-receiver-section{margin-top:0}
+  .editorial-workbench .connections-receiver-section .connections-card-header{margin-bottom:8px}
+  .editorial-workbench .connections-receiver-section .connection-save-form{display:flex;flex-direction:column;margin-top:12px}
+  .editorial-workbench .connections-receiver-fields-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start;margin-bottom:10px}
+  .editorial-workbench .connections-receiver-fields-grid .connection-form-field{margin-bottom:0}
+  .editorial-workbench .connections-receiver-section .connections-actions{margin-top:14px;padding-top:12px;justify-content:flex-start}
+  @media(max-width:760px){.editorial-workbench .connections-receiver-fields-grid{grid-template-columns:1fr;gap:10px}}
 `
 
 func shellHeadExtras() string {

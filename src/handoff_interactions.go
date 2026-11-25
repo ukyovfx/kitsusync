@@ -139,6 +139,9 @@ func handoffInteractionsHandler(db *gorm.DB) http.HandlerFunc {
 		}
 		switch interaction.Type {
 		case interactionTypePing:
+			if err := model.SetSettingWithError(db, setup.DiscordInteractionsLastPingAtSettingKey, strconv.FormatInt(time.Now().UTC().Unix(), 10)); err != nil {
+				slog.Warn("handoff interaction ping timestamp write failed", "err", err)
+			}
 			writeInteractionResponse(w, interactionResponse{Type: interactionResponsePong})
 		case interactionTypeMessageComponent:
 			handleHandoffButton(db, w, r, interaction)

@@ -80,6 +80,24 @@ func TestHandoffButtonsAreInertUntilTheInteractionEndpointExists(t *testing.T) {
 			t.Fatalf("wired button must be enabled: %+v", button)
 		}
 	}
+
+	// Internal operation forces replies unwired and buttons disabled even when a key is stored.
+	model.SetSetting(db, setup.AppOperationPatternSettingKey, setup.OperationPatternInternal)
+	if handoffRepliesWired(db) {
+		t.Fatal("expected replies to be unwired in internal operation even with public key set")
+	}
+	internalRows := handoffReplyRows(db, []model.HandoffEvent{{ID: 7}}, "ja")
+	for _, button := range internalRows[0].Components {
+		if !button.Disabled {
+			t.Fatalf("internal operation button must be disabled: %+v", button)
+		}
+	}
+
+	// External operation restores wired state when the key is set.
+	model.SetSetting(db, setup.AppOperationPatternSettingKey, setup.OperationPatternExternal)
+	if !handoffRepliesWired(db) {
+		t.Fatal("expected replies to be wired in external operation with public key set")
+	}
 }
 
 // handoffEventNamed records one pending event of its own product.
