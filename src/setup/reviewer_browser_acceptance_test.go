@@ -200,7 +200,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 			case "no-matching":
 				_ = json.NewEncoder(w).Encode([]kitsu.Person{{ID: "person-artist", FullName: "Synthetic Artist", Email: "artist@synthetic.invalid", Active: true, Role: "artist"}})
 			case "no-linked":
-				_ = json.NewEncoder(w).Encode([]kitsu.Person{{ID: "person-unlinked", FullName: "Unlinked Supervisor", Email: "unlinked@synthetic.invalid", Active: true, Role: "supervisor"}})
+				_ = json.NewEncoder(w).Encode([]kitsu.Person{{ID: "person-unlinked", FullName: "Unlinked Supervisor", Email: "unlinked@synthetic.invalid", Active: true, Role: "supervisor", Position: "Supervisor"}})
 			case "stale-membership":
 				_ = json.NewEncoder(w).Encode([]kitsu.Person{{ID: "person-artist", FullName: "Synthetic Artist", Email: "artist@synthetic.invalid", Active: true, Role: "artist"}})
 			default:
@@ -676,7 +676,7 @@ func reviewerBrowserForumSettings(projectID, guildID string, routes []model.Prod
 
 func reviewerBrowserTeam() []kitsu.Person {
 	return []kitsu.Person{
-		{ID: "person-promotion", FullName: "Project Supervisor", Email: "promotion@synthetic.invalid", Active: true, Role: "artist", ProjectRole: "supervisor", Departments: []string{"dept-comp"}},
+		{ID: "person-promotion", FullName: "Project Supervisor", Email: "promotion@synthetic.invalid", Active: true, Role: "artist", ProjectRole: "supervisor", Position: "Supervisor", Departments: []string{"dept-comp"}},
 		{ID: "person-no-department", FullName: "Departmentless Supervisor", Email: "no-dept@synthetic.invalid", Active: true, Role: "supervisor"},
 		{ID: "person-wrong-department", FullName: "Wrong Department Supervisor", Email: "wrong-dept@synthetic.invalid", Active: true, Role: "supervisor"},
 		{ID: "person-artist", FullName: "Synthetic Artist", Email: "artist@synthetic.invalid", Active: true, Role: "artist"},
@@ -684,20 +684,20 @@ func reviewerBrowserTeam() []kitsu.Person {
 		{ID: "person-global-admin", FullName: "Global Admin", Email: "admin@synthetic.invalid", Active: true, Role: "admin", ProjectRole: "supervisor"},
 		{ID: "person-demoted", FullName: "Demoted Supervisor", Email: "demoted@synthetic.invalid", Active: true, Role: "supervisor", ProjectRole: "artist"},
 		{ID: "person-project-manager", FullName: "Project Manager Override", Email: "project-manager@synthetic.invalid", Active: true, Role: "supervisor", ProjectRole: "manager"},
-		{ID: "person-position-only", FullName: "Position Only", Email: "position@synthetic.invalid", Active: true, Role: "artist", Data: `{"position":"Supervisor"}`},
-		{ID: "person-inactive", FullName: "Inactive Supervisor", Email: "inactive@synthetic.invalid", Active: false, Role: "supervisor"},
-		{ID: "person-bot", FullName: "Kitsu Bot", Email: "bot@synthetic.invalid", Active: true, IsBot: true, Role: "supervisor"},
-		{ID: "person-unlinked", FullName: "Unlinked Supervisor", Email: "unlinked@synthetic.invalid", Active: true, Role: "supervisor"},
+		{ID: "person-position-only", FullName: "Position Only", Email: "position@synthetic.invalid", Active: true, Role: "artist", Position: "Supervisor"},
+		{ID: "person-inactive", FullName: "Inactive Supervisor", Email: "inactive@synthetic.invalid", Active: false, Role: "supervisor", Position: "Supervisor"},
+		{ID: "person-bot", FullName: "Kitsu Bot", Email: "bot@synthetic.invalid", Active: true, IsBot: true, Role: "supervisor", Position: "Supervisor"},
+		{ID: "person-unlinked", FullName: "Unlinked Supervisor", Email: "unlinked@synthetic.invalid", Active: true, Role: "supervisor", Position: "Supervisor"},
 		{ID: "person-non-guild", FullName: "Non Guild User", Email: "non-guild@synthetic.invalid", Active: true, Role: "artist"},
 		{ID: "person-override", FullName: "Override Candidate", Email: "override@synthetic.invalid", Active: true, Role: "artist"},
-		{ID: "person-global-name", FullName: "Global Name Supervisor", Email: "global-name@synthetic.invalid", Active: true, Role: "supervisor"},
-		{ID: "person-username", FullName: "Username Supervisor", Email: "username@synthetic.invalid", Active: true, Role: "supervisor"},
+		{ID: "person-global-name", FullName: "Global Name Supervisor", Email: "global-name@synthetic.invalid", Active: true, Role: "supervisor", Position: "Supervisor"},
+		{ID: "person-username", FullName: "Username Supervisor", Email: "username@synthetic.invalid", Active: true, Role: "supervisor", Position: "Supervisor"},
 	}
 }
 
 func reviewerBrowserPeople() []kitsu.Person {
 	people := reviewerBrowserTeam()
-	people = append(people, kitsu.Person{ID: "person-not-team", FullName: "Not a Team Member", Email: "non-team@synthetic.invalid", Active: true, Role: "supervisor"})
+	people = append(people, kitsu.Person{ID: "person-not-team", FullName: "Not a Team Member", Email: "non-team@synthetic.invalid", Active: true, Role: "supervisor", Position: "Supervisor"})
 	return people
 }
 
