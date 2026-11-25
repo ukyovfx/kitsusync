@@ -1783,7 +1783,7 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB, pollInt
 	handoffSection := renderHandoffAttentionSection(lang, db)
 	body := `<div class="section-stack"><section class="section-card glass pipeline-health" aria-labelledby="pipeline-health-title"><div class="page-heading"><div><h2 id="pipeline-health-title">` + esc(t(lang, "通知パイプラインの状態", "Notification pipeline health")) + `</h2><p class="hint">` + esc(t(lang, "通知に関わる各段階の状態を確認できます。取得できないメトリクスは未確認として表示します。", "Review each notification stage. Metrics that are not available are shown as unconfirmed.")) + `</p></div><span class="status-pill ` + esc(readinessView.Class) + `" role="status">` + esc(readinessView.Label) + `</span></div><div class="pipeline-health-grid">` + healthRows.String() + `</div></section>` + livenessSection + handoffSection + issuesSection + `</div>`
 	body = renderRuntimeObservabilitySummary(lang, stats, readiness, windowName, body)
-	if card := currentProblemCard(lang, items); card != "" {
+	if card := currentProblemCard(lang, r, db, items); card != "" {
 		body = strings.Replace(body, `<div class="section-stack system-status-sections">`, `<div class="section-stack system-status-sections">`+card, 1)
 	}
 	body += `<script data-system-status-refresh></script>`
@@ -1875,12 +1875,11 @@ func renderRuntimeObservabilitySummaryRawAt(lang string, stats RuntimeSnapshot, 
 	return `<section class="section-card glass system-observability" aria-labelledby="system-observability-title"><div class="page-heading"><div><h2 id="system-observability-title">` + esc(t(lang, "外部APIの健全性", "External API health")) + `</h2><p class="hint">` + esc(t(lang, "実測できた応答時間を時間順に表示します。", "Shows real response times in chronological order.")) + `</p></div><div class="telemetry-window-actions"><span class="system-live-indicator" role="status"><i aria-hidden="true"></i><span data-system-live-label>` + esc(t(lang, "自動更新", "Auto-refresh")) + `</span></span></div></div><div class="system-observability-grid"><article class="api-observation-card" data-telemetry-card="kitsu"><div class="api-observation-summary"><h3>Kitsu API</h3><span class="status-pill ` + apiObservationStatusClassAt(stats, "kitsu", asOf) + `" role="status" data-telemetry-status>` + esc(apiObservationStatusAt(lang, stats, "kitsu", asOf)) + `</span></div><div class="api-observation-details" data-telemetry-details="kitsu">` + apiObservationDetailsAt(lang, stats, "kitsu", windowName, asOf) + `</div></article><article class="api-observation-card" data-telemetry-card="discord"><div class="api-observation-summary"><h3>Discord API</h3><span class="status-pill ` + apiObservationStatusClassAt(stats, "discord", asOf) + `" role="status" data-telemetry-status>` + esc(apiObservationStatusAt(lang, stats, "discord", asOf)) + `</span></div><div class="api-observation-details" data-telemetry-details="discord">` + apiObservationDetailsAt(lang, stats, "discord", windowName, asOf) + `</div></article></div></section>` + body
 }
 
-// currentProblemCard summarizes the first non-OK pipeline row as one
-// compact card at the top of the system status page: what the problem is,
-// why (the row's own explanation, when it carries one), and the row's
-// next-action link. It derives only from the rows already computed for
-// the page; when every row is OK it renders nothing.
-func currentProblemCard(lang string, items []pipelineHealthItem) string {
+// currentProblemCard summarizes the first non-OK pipeline row and any
+// missing button-receiver configuration as one compact card at the top of
+// the system status page. When every check is OK it renders nothing.
+func currentProblemCard(lang string, r *http.Request, db *gorm.DB, items []pipelineHealthItem) string {
+	var rows strings.Builder
 	for _, item := range items {
 		if normalizeStatusClass(item.class) == "success" {
 			continue
@@ -1893,9 +1892,16 @@ func currentProblemCard(lang string, items []pipelineHealthItem) string {
 		if item.action != "" && item.actionLabel != "" {
 			action = `<a class="linkbtn" href="` + esc(item.action) + `">` + esc(item.actionLabel) + `</a>`
 		}
-		return `<section class="section-card glass current-problem" aria-labelledby="current-problem-title"><h2 id="current-problem-title">` + esc(t(lang, "現在の問題", "Current problem")) + `</h2><div class="current-problem-row"><span class="dot" aria-hidden="true"></span><div class="body">` + esc(item.label) + `: ` + esc(item.value) + sub + `</div>` + action + `</div></section>`
+		rows.WriteString(`<div class="current-problem-row"><span class="dot" aria-hidden="true"></span><div class="body">` + esc(item.label) + `: ` + esc(item.value) + sub + `</div>` + action + `</div>`)
+		break
 	}
-	return ""
+	if DiscordApplicationPublicKey(db) == "" && AppOperationPattern(db) != OperationPatternInternal {
+		rows.WriteString(`<div class="current-problem-row"><span class="dot" aria-hidden="true"></span><div class="body">` + esc(t(lang, "Discord ボタンの受け口が未設定です", "The Discord button receiver is not configured")) + `</div><a class="linkbtn" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "接続設定", "Connection settings")) + `</a></div>`)
+	}
+	if rows.Len() == 0 {
+		return ""
+	}
+	return `<section class="section-card glass current-problem" aria-labelledby="current-problem-title"><h2 id="current-problem-title">` + esc(t(lang, "現在の問題", "Current problem")) + `</h2>` + rows.String() + `</section>`
 }
 
 func renderPipelineHealthItem(lang string, item pipelineHealthItem, index int) string {

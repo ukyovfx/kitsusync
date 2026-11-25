@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,9 +27,59 @@ const (
 	// a public value by design, so unlike the bot token it is stored
 	// unencrypted, like discord.guildID.
 	DiscordApplicationPublicKeySettingKey = "discord.application_public_key"
-	RuntimeSecretKeyFileEnv               = "KITSUSYNC_SECRET_KEY_FILE"
-	defaultRuntimeSecretKeyFile           = "data/runtime-secret.key"
+	// DiscordInteractionsLastPingAtSettingKey stores the Unix timestamp (seconds)
+	// of the last verified Discord interaction PING callback.
+	DiscordInteractionsLastPingAtSettingKey = "discord.interactions_last_ping_at"
+	// AppExternalURLSettingKey holds the externally reachable base URL for this
+	// KitsuSync instance, used to pin the Discord Interactions Endpoint URL.
+	AppExternalURLSettingKey = "app.external_url"
+	// AppObservedPublicURLSettingKey holds the last public-looking scheme+host
+	// observed from an admin request, used as a fallback candidate before
+	// app.external_url is explicitly saved.
+	AppObservedPublicURLSettingKey = "app.observed_public_url"
+	// AppOperationPatternSettingKey holds the declared operation pattern for
+	// this KitsuSync instance ("internal" or "external"; anything else means
+	// undeclared).
+	AppOperationPatternSettingKey = "app.operation_pattern"
+	OperationPatternInternal      = "internal"
+	OperationPatternExternal      = "external"
+	RuntimeSecretKeyFileEnv       = "KITSUSYNC_SECRET_KEY_FILE"
+	defaultRuntimeSecretKeyFile   = "data/runtime-secret.key"
 )
+
+// AppOperationPattern returns the declared operation pattern ("internal" or
+// "external"), or "" when undeclared or invalid.
+func AppOperationPattern(db *gorm.DB) string {
+	if db == nil {
+		return ""
+	}
+	switch strings.TrimSpace(model.GetSetting(db, AppOperationPatternSettingKey)) {
+	case OperationPatternInternal:
+		return OperationPatternInternal
+	case OperationPatternExternal:
+		return OperationPatternExternal
+	default:
+		return ""
+	}
+}
+
+// AppExternalURL returns the configured external base URL for this app,
+// or "" when unset.
+func AppExternalURL(db *gorm.DB) string {
+	if db == nil {
+		return ""
+	}
+	return strings.TrimSpace(model.GetSetting(db, AppExternalURLSettingKey))
+}
+
+// AppObservedPublicURL returns the last observed public-looking base URL
+// for this app, or "" when none has been recorded.
+func AppObservedPublicURL(db *gorm.DB) string {
+	if db == nil {
+		return ""
+	}
+	return strings.TrimSpace(model.GetSetting(db, AppObservedPublicURLSettingKey))
+}
 
 // DiscordApplicationPublicKey returns the configured Discord application
 // public key, or "" when interaction callbacks are not set up.
@@ -37,6 +88,23 @@ func DiscordApplicationPublicKey(db *gorm.DB) string {
 		return ""
 	}
 	return strings.TrimSpace(model.GetSetting(db, DiscordApplicationPublicKeySettingKey))
+}
+
+// DiscordInteractionsLastPingAt returns the timestamp of the last verified
+// Discord PING interaction, or (zero, false) when none has been recorded.
+func DiscordInteractionsLastPingAt(db *gorm.DB) (time.Time, bool) {
+	if db == nil {
+		return time.Time{}, false
+	}
+	raw := strings.TrimSpace(model.GetSetting(db, DiscordInteractionsLastPingAtSettingKey))
+	if raw == "" {
+		return time.Time{}, false
+	}
+	sec, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || sec <= 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(sec, 0), true
 }
 
 // StoredRuntimeDiscordBotToken reads the encrypted Discord token. The legacy

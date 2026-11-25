@@ -470,13 +470,6 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 		ResolveReviewers: func(projectID, taskTypeID, taskTypeName string) ([]discord.ReviewerTarget, error) {
 			return forumReviewerTargets(db, conf, botToken, projectID, taskTypeID)
 		},
-		ResolveAdmins: func(projectID string) ([]string, error) {
-			project := model.FindProjectByKitsuID(db, projectID)
-			if project == nil || strings.TrimSpace(project.DiscordGuildID) == "" {
-				return nil, nil
-			}
-			return setup.GuildAdministratorDiscordIDs(project.DiscordGuildID, botToken), nil
-		},
 	}
 	executor := forum.Executor{
 		DB:       db,
@@ -1320,16 +1313,19 @@ func main() {
 	setupAPIRoutes("/bot")
 
 	registerAdminRoutes := func(prefix string) {
-		mux.HandleFunc(prefix+"/admin", setup.RequireSession(setup.AdminIndexWithRuntime(db, runtime.ready)))
-		mux.HandleFunc(prefix+"/admin/users", setup.RequireSession(setup.ReadOnlyAuditRoute(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
+		adminAuth := func(h http.HandlerFunc) http.HandlerFunc {
+			return setup.RequireSession(setup.ObservePublicURLMiddleware(db, h))
+		}
+		mux.HandleFunc(prefix+"/admin", adminAuth(setup.AdminIndexWithRuntime(db, runtime.ready)))
+		mux.HandleFunc(prefix+"/admin/users", adminAuth(setup.ReadOnlyAuditRoute(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
 			h, _, _ := getKitsuCreds(db, conf)
 			setup.UsersHandler(db, h)(w, r)
 		})))
-		mux.HandleFunc(prefix+"/admin/drive", setup.RequireSession(setup.DriveHandler(db)))
+		mux.HandleFunc(prefix+"/admin/drive", adminAuth(setup.DriveHandler(db)))
 		// BotHandler persists shared runtime credentials and triggers reconnect.
 		kitsuReconnect := func() { onRuntimeConfigured() }
 		botHandler := setup.BotHandlerWithRuntime(db, kitsuReconnect, runtime.ready)
-		botRouteHandler := setup.RequireSession(setup.RejectValidationMutation(func(w http.ResponseWriter, r *http.Request) {
+		botRouteHandler := adminAuth(setup.RejectValidationMutation(func(w http.ResponseWriter, r *http.Request) {
 			slog.Debug("Admin bot route dispatched", "method", r.Method, "path", r.URL.Path)
 			botHandler(w, r)
 		}))
@@ -1337,30 +1333,30 @@ func main() {
 		mux.HandleFunc(prefix+"/admin/bot/connections", botRouteHandler)
 		mux.HandleFunc(prefix+"/admin/bot/statuses", botRouteHandler)
 		mux.HandleFunc(prefix+"/admin/bot/wiring", botRouteHandler)
-		mux.HandleFunc(prefix+"/admin/projects", setup.RequireSession(setup.ReadOnlyAuditRoute(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc(prefix+"/admin/projects", adminAuth(setup.ReadOnlyAuditRoute(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
 			botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
 			setup.AdminProjectsHandler(db, fallbackGuildID, botToken)(w, r)
 		})))
 		// Forum settings are local configuration: saving needs neither Kitsu nor the
 		// runtime to be ready, so this page is not behind the runtime-ready gate.
 		// A global validation-only profile still refuses writes.
-		mux.HandleFunc(prefix+"/admin/forum", setup.RequireSession(setup.RejectValidationMutation(func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc(prefix+"/admin/forum", adminAuth(setup.RejectValidationMutation(func(w http.ResponseWriter, r *http.Request) {
 			botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
 			setup.ForumSettingsHandler(db, func() (string, string) { return botToken, fallbackGuildID })(w, r)
 		})))
 		// The handoff mapping is local per-Production configuration as well: it is
 		// stored by KitsuSync and needs neither Kitsu nor Discord to save. An
 		// unconfigured Production has no rows, so the handoff path stays inactive.
-		mux.HandleFunc(prefix+"/admin/handoff", setup.RequireSession(setup.RejectValidationMutation(setup.HandoffSettingsHandler(db))))
+		mux.HandleFunc(prefix+"/admin/handoff", adminAuth(setup.RejectValidationMutation(setup.HandoffSettingsHandler(db))))
 		// Manual refetch of a guild's channel list, bypassing the admin pages'
 		// cache. A plain GET link (PRG): the operator explicitly asked to wait
 		// for Discord's answer, so botDo's retries run synchronously here.
-		mux.HandleFunc("GET "+prefix+"/admin/refresh-discord-channels", setup.RequireSession(setup.RefreshDiscordChannelsHandler(func() string {
+		mux.HandleFunc("GET "+prefix+"/admin/refresh-discord-channels", adminAuth(setup.RefreshDiscordChannelsHandler(func() string {
 			botToken, _, _ := getDiscordSettings(db, conf)
 			return botToken
 		})))
-		mux.HandleFunc(prefix+"/admin/audit", setup.RequireSession(setup.AuditLogHandler(db)))
-		mux.HandleFunc(prefix+"/admin/health", setup.RequireSession(setup.HealthHandler(db, conf.PollInterval())))
+		mux.HandleFunc(prefix+"/admin/audit", adminAuth(setup.AuditLogHandler(db)))
+		mux.HandleFunc(prefix+"/admin/health", adminAuth(setup.HealthHandler(db, conf.PollInterval())))
 	}
 	registerAdminRoutes("")
 	registerAdminRoutes("/bot")
