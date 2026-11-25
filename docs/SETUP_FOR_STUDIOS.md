@@ -37,7 +37,7 @@ If you need to rotate the credential later, you can regenerate the token from th
 4. Under **Privileged Gateway Intents**, leave Presence Intent and Message Content Intent turned off. Enable Server Members Intent if you will use User Linking; KitsuSync reads the Guild member list for that screen.
 5. Go to **OAuth2 → URL Generator**.
 6. Select scopes: `bot`
-7. Select the bot permissions `Manage Channels` and `Manage Webhooks`. Administrator is not required.
+7. Select the bot permissions `Manage Channels`, `View Channel`, `Send Messages`, `Send Messages in Threads`, `Manage Threads`, `Embed Links`, and `Read Message History`. Administrator is not required.
 8. Copy the generated URL and open it in a browser to add the bot to your server.
 
 Note your **Discord Guild IDs** (Server IDs) for each production server:
@@ -159,11 +159,11 @@ If setup fails partway through, read the `FAIL:` / `WARN:` lines in the output c
 
 ### Step 4: Optional Post-setup Review (`/bot/admin`)
 
-After project setup, open `/bot/admin` to verify:
+After project setup, open `/bot/admin` and review:
 
-- **Routing** tab: Shows which Kitsu task types send to which Discord channels.
-- **Users** tab: Optional follow-up mapping of Kitsu usernames to Discord user IDs so the bot can `@mention` people.
-- **Checkers** tab: Optional follow-up mapping of task types to checker Discord IDs so the bot mentions reviewers when status changes to WFA.
+- **Connections** (`/bot/admin/bot`): Kitsu and Discord connection state. Its sub-pages assign Kitsu task statuses to notification roles and edit the handoff wiring between task types.
+- **User Linking** (`/bot/admin/users`): Link Kitsu people to Discord accounts so notifications can @mention them. Who receives a Waiting For Approval notification is resolved from Kitsu positions (Supervisor), not configured here.
+- **System Status** (`/bot/admin/health`): Current problems and the latest delivery checks.
 
 ---
 
@@ -201,6 +201,8 @@ The wrapper-managed config files (`conf.toml`, protected `.env.local`) are not
 replaced by an image update; keep them under the deployment policy and backup
 process.
 
+Back up the data directory as one unit: the SQLite database and `runtime-secret.key` belong together. Without the key, the credentials stored in the database cannot be read back.
+
 ---
 
 ## Common First-Setup Issues
@@ -209,7 +211,7 @@ process.
 |---------|-------------|-----|
 | Login fails immediately | Kitsu credentials or URL wrong | Check `KITSU_HOSTNAME` and verify that the bot API token saved on the Connections screen (`/bot/admin/bot`) is valid |
 | Bot Setup fails | Bot token or Guild ID wrong | Double-check both in `.env.local` |
-| Project Setup fails | Bot lacks Discord permissions | Verify bot has Manage Channels and Manage Webhooks |
+| Project Setup fails | Bot lacks Discord permissions | Verify the bot has the permissions listed in Part 2 |
 | Notifications not arriving | Project forum missing or production not connected | Complete project setup so the forum is created, and confirm the production shows as connected on the admin screen |
 | `/health` returns 502 | App not started | For production, inspect the wrapper-managed service and readiness state; use direct Compose only for local development |
 
