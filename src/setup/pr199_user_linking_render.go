@@ -188,15 +188,15 @@ func renderGlobalUserLinkingTable(db *gorm.DB, lang string, directory globalDisc
 			`<select data-initial-index="` + fmt.Sprint(initialIndex) + `" name="bulk_discord_user_id" aria-label="` +
 			esc(person.FullName+" - "+t(lang, "Discordユーザー", "Discord user")) + `">` +
 			memberOptions(currentDiscordID) + `</select>`
+		statusCell := `<span class="status-badge status-badge-` + class + `" role="status">` + esc(state) + `</span>`
 		if mapped != nil && mapped.ID > 0 {
-			form += `<button class="btn-ghost" type="submit" name="unlink_user_id" value="` + esc(fmt.Sprint(mapped.ID)) + `" data-confirm="` +
+			statusCell = `<span class="user-link-status-inline">` + statusCell + `<button class="btn-ghost sm" type="submit" name="unlink_user_id" value="` + esc(fmt.Sprint(mapped.ID)) + `" data-confirm="` +
 				esc(t(lang, "Kitsuユーザー「"+person.FullName+"」とDiscordユーザー「"+identity+"」の紐づけを解除します。", "Unlink the Kitsu user \""+person.FullName+"\" from Discord user \""+identity+"\".")) +
-				`">` + esc(t(lang, "解除", "Unlink")) + `</button>`
+				`">` + esc(t(lang, "解除", "Unlink")) + `</button></span>`
 		}
 		rows.WriteString(`<tr class="user-link-grid-row"><td data-label="` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `">` +
 			esc(person.FullName) + `</td><td data-label="` + esc(t(lang, "Discordユーザー", "Discord user")) + `"><span class="user-link-discord-identity" title="` + esc(identity) + `">` +
-			esc(identity) + `</span></td><td data-label="` + esc(t(lang, "状態", "Status")) + `"><span class="status-badge status-badge-` +
-			class + `" role="status">` + esc(state) + `</span></td><td data-label="` + esc(t(lang, "操作", "Actions")) +
+			esc(identity) + `</span></td><td data-label="` + esc(t(lang, "状態", "Status")) + `">` + statusCell + `</td><td data-label="` + esc(t(lang, "操作", "Actions")) +
 			`"><div class="user-link-actions">` + form + `</div></td></tr>`)
 	}
 	return `<form method="POST" class="user-linking-bulk" data-bulk-link-form><input type="hidden" name="action" value="save_global_links"><input type="hidden" name="discord_guild_id" value="` +

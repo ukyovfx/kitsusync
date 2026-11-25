@@ -88,3 +88,41 @@ func TestRenderHandoffAttentionSection(t *testing.T) {
 		t.Fatalf("section must show the fallback count, got %q", got)
 	}
 }
+
+func TestHealthTablesShareAlignedColumnLayout(t *testing.T) {
+	liveness := renderLivenessSection("ja", RuntimeSnapshot{LastPollTime: time.Now()}, 10*time.Second)
+	if !strings.Contains(liveness, `class="data-table mobile-card-table health-status-table"`) {
+		t.Fatalf("liveness table must preserve mobile-card-table and share health-status-table: %s", liveness)
+	}
+
+	db, err := gorm.Open(sqlite.Open("file:health-issues-"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.AuditLog{}); err != nil {
+		t.Fatal(err)
+	}
+	model.WriteAuditLog(db, model.AuditLog{
+		ProjectName:  "Prod One",
+		ErrorMessage: strings.Repeat("long-error-detail-", 8),
+		Success:      false,
+	})
+	issues := recentSystemIssues("ja", nil, db)
+	if !strings.Contains(issues, `class="data-table system-issues-table health-status-table"`) {
+		t.Fatalf("system issues table must share health-status-table: %s", issues)
+	}
+
+	for _, want := range []string{
+		`.system-status-sections>.section-stack>.system-issues>.data-table{margin-inline:var(--system-status-content-inset);margin-top:var(--system-status-heading-to-content)}`,
+		`.system-status-sections .health-status-table{width:calc(100% - (var(--system-status-content-inset) * 2))}`,
+		`.system-status-sections .health-status-table th,.system-status-sections .health-status-table td{text-align:left;overflow-wrap:anywhere}`,
+		`@media(min-width:761px){.system-status-sections .health-status-table{table-layout:fixed}`,
+		`.system-status-sections .health-status-table th:nth-child(1),.system-status-sections .health-status-table td:nth-child(1){width:34%}`,
+		`.system-status-sections .health-status-table th:nth-child(2),.system-status-sections .health-status-table td:nth-child(2){width:33%}`,
+		`.system-status-sections .health-status-table th:nth-child(3),.system-status-sections .health-status-table td:nth-child(3){width:33%}`,
+	} {
+		if !strings.Contains(adminThemeCSS, want) {
+			t.Fatalf("adminThemeCSS missing shared health table rule %q", want)
+		}
+	}
+}

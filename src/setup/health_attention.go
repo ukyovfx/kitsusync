@@ -88,7 +88,7 @@ func renderLivenessSection(lang string, stats RuntimeSnapshot, pollInterval time
 	if stale {
 		headerPill = `<span class="status-pill bad" role="status">` + esc(t(lang, "要確認", "Needs review")) + `</span>`
 	}
-	table := `<table class="data-table mobile-card-table" aria-label="` + esc(t(lang, "最終成功時刻", "Last success times")) + `"><thead><tr><th scope="col">` + esc(t(lang, "対象", "Stage")) + `</th><th scope="col">` + esc(t(lang, "状態", "State")) + `</th><th scope="col">` + esc(t(lang, "最終成功", "Last success")) + `</th></tr></thead><tbody>` + rows + `</tbody></table>`
+	table := `<table class="data-table mobile-card-table health-status-table" aria-label="` + esc(t(lang, "最終成功時刻", "Last success times")) + `"><thead><tr><th scope="col">` + esc(t(lang, "対象", "Stage")) + `</th><th scope="col">` + esc(t(lang, "状態", "State")) + `</th><th scope="col">` + esc(t(lang, "最終成功", "Last success")) + `</th></tr></thead><tbody>` + rows + `</tbody></table>`
 	return `<section class="section-card glass liveness" aria-labelledby="liveness-title"><div class="page-heading"><div><h2 id="liveness-title">` + esc(t(lang, "動作の最終確認", "Liveness")) + `</h2><p class="hint">` + esc(t(lang, "ポーリング・Kitsu 取得・Discord 送信が最後に成功した時刻です。ポーリング成功が止まると要確認になります。", "When polling, the Kitsu fetch and the Discord send last succeeded. A stalled poll is marked as needing review.")) + `</p></div>` + headerPill + `</div>` + table + `</section>`
 }
 
