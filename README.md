@@ -8,7 +8,7 @@
 
 KitsuSync is a Kitsu x Discord pipeline bridge for VFX and animation teams. It polls Kitsu, detects task changes, and posts structured Discord notifications with setup and admin tools in the browser.
 
-**Current source baseline: v0.5.1.** See the [latest GitHub Release](https://github.com/ukyovfx/kitsusync/releases/latest) for the current published version and assets. KitsuSync is focused on small and mid-size CG/VFX and indie animation team workflows; it is not intended to replace enterprise production tracking systems.
+**Current source baseline: v0.9.8.** See the [latest GitHub Release](https://github.com/ukyovfx/kitsusync/releases/latest) for the current published version and assets. KitsuSync is focused on small and mid-size CG/VFX and indie animation team workflows; it is not intended to replace enterprise production tracking systems.
 
 ## Why This Repo Exists
 
@@ -40,7 +40,7 @@ Browser admin UI
   -> /bot/admin
 ```
 
-## Current Source Baseline (v0.5.1)
+## Current Source Baseline (v0.9.8)
 
 - v0.2.0: Setup Wizard/operator clarity and setup-surface role consistency
 - v0.2.1: repository rename/public URL alignment to `ukyovfx/kitsusync`
@@ -51,6 +51,7 @@ Browser admin UI
 - v0.4.3: safe Kitsu endpoint auto-discovery and validated fresh-initialization URL fallback
 - v0.4.4: status-aware notification cards and Production-level Discord notification language selection
 - v0.5.1: accepted v0.5.0 product changes plus release-tag provenance validation correction; consult the release notes for version-specific verification status
+- v0.9.8: forum-based notification model with status-driven handoff notifications, Connections-screen credential setup (Kitsu Bot API token), and the current admin UI; consult the release notes for version-specific verification status
 
 For release history, see `CHANGELOG.md` and the [GitHub Releases](https://github.com/ukyovfx/kitsusync/releases) page. Per-version release notes live with their GitHub Releases.
 
@@ -144,7 +145,7 @@ For browser-first setup:
 3. Open `/bot/setup` and configure the dedicated Kitsu runtime connection.
 4. Configure the Discord Bot Token in Bot Settings, then assign Guild IDs during production setup.
 
-Existing installations may continue supplying `KITSU_HOSTNAME`, `KITSU_RUNTIME_EMAIL`, and `KITSU_RUNTIME_PASSWORD` through environment/config files. Browser admin sessions remain separate from background runtime authentication.
+Existing installations may continue supplying `KITSU_HOSTNAME` through environment/config files; Kitsu credentials are configured via the Kitsu Bot API token on the Connections screen (`/bot/admin/bot`). Browser admin sessions remain separate from background runtime authentication.
 
 If you want a default catch-all Discord route before project setup, also set:
 
@@ -236,11 +237,6 @@ See `.env.example` for the full template. Copy it to `.env.local` for local deve
 - `KITSU_HOSTNAME`
 - `DISCORD_BOT_TOKEN`
 
-### Required if you want polling to work immediately on first boot
-
-- `KITSU_RUNTIME_EMAIL`
-- `KITSU_RUNTIME_PASSWORD`
-
 ### Optional
 
 - `DISCORD_GUILD_ID` (legacy/shared fallback only; new project setup uses project-level Guild ID)
@@ -329,9 +325,7 @@ location ~ ^/api/pictures/thumbnails/preview-files/ {
 ### `Initial Kitsu authentication failed`
 
 - Check `KITSU_HOSTNAME`
-- Check `KITSU_RUNTIME_EMAIL`
-- Check `KITSU_RUNTIME_PASSWORD`
-- Or complete shared bot/runtime setup from `/bot/admin/bot`
+- Verify the Kitsu Bot API token saved on the Connections screen (`/bot/admin/bot`) is valid
 
 ### Notifications are not arriving
 

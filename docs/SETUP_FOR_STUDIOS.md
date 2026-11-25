@@ -8,20 +8,24 @@ This guide walks through the complete setup of KitsuSync for a studio that alrea
 - A **Discord server** where the bot can be granted the required permissions
 - A **server or VM** with Docker and Docker Compose installed
 - A **Kitsu account** with `manager` or `admin` role (for logging into KitsuSync)
-- A **dedicated Kitsu runtime account** (a bot/service account used for polling — see below)
+- A **Kitsu bot and its API token** (created in Part 1)
 
 ---
 
-## Part 1: Create a Runtime Account in Kitsu
+## Part 1: Create a Bot in Kitsu
 
-KitsuSync needs a dedicated Kitsu account to poll for changes. This should be a service account, not a personal account.
+KitsuSync uses a dedicated Kitsu bot and its API token to poll for changes. Bots have no password (the API token is their only credential) and do not count as active users.
 
-1. Log into Kitsu as admin.
-2. Go to **Admin → People** → Add a new person.
-3. Set the role to **CG Artist** or **Manager** (Manager lets it see all projects).
-4. Note the email and password — you'll need them for `.env.local`.
+1. Log into Kitsu as an admin.
+2. Open the **Main Menu**, go to the **Admin** section, and open the **Bots** page.
+3. Click **New Bot**.
+4. Fill in the bot's name, set its role to **Admin** (so it can read every production, task, and comment, and post comments), and set departments or an expiration date if needed.
+5. Click **Create user**.
+6. Copy the **API token** shown in the pop-up. You will enter this token in the browser during Part 4 — do not put it in `.env.local` or any config file.
 
-> Using a dedicated account means you can rotate the password without affecting real users, and you can see exactly which API calls come from the bot in Kitsu audit logs.
+If you need to rotate the credential later, you can regenerate the token from the **Bots** page in Kitsu, which immediately revokes the old token.
+
+> Using a dedicated bot keeps KitsuSync's API activity separate from real users in Kitsu audit logs, and lets you rotate the token without affecting personal accounts.
 
 ---
 
@@ -63,14 +67,14 @@ Open `.env.local` in a text editor and fill in:
 
 ```env
 KITSU_HOSTNAME=http://YOUR_KITSU_HOST/      # Include http:// and trailing slash
-KITSU_RUNTIME_EMAIL=bot@yourstudio.com      # The runtime account you created in Part 1
-KITSU_RUNTIME_PASSWORD=yourpassword
 
 DISCORD_BOT_TOKEN=your-bot-token            # From Discord Developer Portal (Part 2)
 DISCORD_GUILD_ID=optional-fallback-server-id  # Optional fallback only
 
 DISCORD_WEBHOOK_URL=                        # Leave blank for now; set up later via project management if needed
 ```
+
+> The Kitsu credential is not an environment variable — you will enter the bot API token in the browser in Part 4, where KitsuSync stores it encrypted.
 
 ### Review `conf.toml`
 
@@ -126,16 +130,16 @@ the proxy.
 
 ### Step 1: Log in
 
-Sign in with your **personal** Kitsu manager or admin account. This is not the runtime account — it's your own login used to operate the admin UI.
+Sign in with your **personal** Kitsu manager or admin account. This is not the bot — it's your own login used to operate the admin UI.
 
-Sessions expire after 15 minutes.
+Sessions expire after 8 hours.
 
 ### Step 2: Review Bot Settings and open Project Management
 
 For first-time setup, use `/bot/admin/bot` for shared prerequisites, then continue into `/bot/setup` for project routing.
 
 1. Open `/bot/admin/bot`.
-2. Save or review shared bot/runtime credentials if needed.
+2. In the Kitsu card, paste the bot API token you copied in Part 1 into the **Kitsu Bot API token** field and save. The screen validates the token and shows the connection state.
 3. Open `/bot/setup`.
 4. Keep `/bot/admin/projects` for later review/edit of existing project guild assignment.
 
@@ -149,7 +153,7 @@ This stage handles Discord resource creation for one Kitsu project and is now th
 4. Confirm creation only after the preview looks correct.
 5. Send one test notification before treating the project as complete.
 
-Connection testing happens before this stage. This is the point where Discord categories, channels, and webhooks may actually be created.
+Connection testing happens before this stage. This is the point where the Discord category and forum channels may actually be created.
 
 If setup fails partway through, read the `FAIL:` / `WARN:` lines in the output carefully. Rollback is best-effort, and manual Discord cleanup may still be required before retrying.
 
@@ -203,10 +207,10 @@ process.
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
-| Login fails immediately | Kitsu credentials or URL wrong | Check `KITSU_HOSTNAME`, `KITSU_RUNTIME_EMAIL`, `KITSU_RUNTIME_PASSWORD` |
+| Login fails immediately | Kitsu credentials or URL wrong | Check `KITSU_HOSTNAME` and verify that the bot API token saved on the Connections screen (`/bot/admin/bot`) is valid |
 | Bot Setup fails | Bot token or Guild ID wrong | Double-check both in `.env.local` |
 | Project Setup fails | Bot lacks Discord permissions | Verify bot has Manage Channels and Manage Webhooks |
-| Notifications not arriving | No fallback webhook | Set `DISCORD_WEBHOOK_URL` or ensure project routing is active |
+| Notifications not arriving | Project forum missing or production not connected | Complete project setup so the forum is created, and confirm the production shows as connected on the admin screen |
 | `/health` returns 502 | App not started | For production, inspect the wrapper-managed service and readiness state; use direct Compose only for local development |
 
 For more detailed troubleshooting, see `docs/TROUBLESHOOTING.md`.
