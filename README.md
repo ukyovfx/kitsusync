@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/images/logo.svg" width="120" alt="KitsuSync logo"></p>
+
 # KitsuSync
 
 [![Build](https://img.shields.io/badge/build-GitHub%20Actions-blue)](#)
@@ -9,6 +11,14 @@
 KitsuSync is a Kitsu x Discord pipeline bridge for VFX and animation teams. It polls Kitsu, detects task changes, and posts structured Discord notifications with setup and admin tools in the browser.
 
 **Current source baseline: v0.9.8.** See the [latest GitHub Release](https://github.com/ukyovfx/kitsusync/releases/latest) for the current published version and assets. KitsuSync is focused on small and mid-size CG/VFX and indie animation team workflows; it is not intended to replace enterprise production tracking systems.
+
+## Screenshots
+
+![Dashboard](docs/images/screenshot-dashboard.png)
+
+![Connections](docs/images/screenshot-connections.png)
+
+![Handoff wiring](docs/images/screenshot-wiring.png)
 
 ## Why This Repo Exists
 
@@ -366,3 +376,5 @@ location ~ ^/api/pictures/thumbnails/preview-files/ {
 Apache License 2.0. See [`LICENSE`](LICENSE).
 
 This project is a fork of [keshon/kitsu-to-discord-task-notification](https://github.com/keshon/kitsu-to-discord-task-notification) (Apache 2.0). Keep the upstream copyright and `NOTICE` (if any) when redistributing.
+
+The KitsuSync name and logo (`docs/images/logo.svg`) and artwork derived from them (for example `docs/images/social-preview.png` and `docs/images/release-v0.9.8.png`) are not covered by the Apache License 2.0 and remain the property of the project owner. You may use the logo to refer to KitsuSync, but you may not use it as branding for another product or service, modify it, or use it in a way that implies endorsement by the project.
