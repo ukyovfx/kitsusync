@@ -410,7 +410,7 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 	model.SetSetting(db, KitsuAPIBaseURLSettingKey, "https://api.kitsu.example.test")
 
 	body := renderConnectionsEditFormWithIdentityRows("en", httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang=en", nil), db, "", "warn", "Needs review", "https://kitsu.example.test", false, false, "Test Bot")
-	for _, want := range []string{"Needs review", "Check connection", "Change token", `placeholder="••••••••••••••••••••"`, `name="action" value="save_kitsu"`, `name="action" value="save_discord"`} {
+	for _, want := range []string{"Needs review", "Check connection", `placeholder="••••••••••••••••••••"`, `name="action" value="save_kitsu"`, `name="action" value="save_discord"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("saved-secret form missing %q", want)
 		}
@@ -423,14 +423,17 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 			t.Fatalf("saved secret or mask leaked into form: %q", secret)
 		}
 	}
-	if strings.Count(body, `placeholder="••••••••••••••••••••"`) != 2 || strings.Count(body, "Change token") != 2 || strings.Count(body, "Cancel") < 2 {
-		t.Fatal("saved token controls must remain visible with masked placeholders and change/cancel actions")
+	if strings.Count(body, `placeholder="••••••••••••••••••••"`) != 2 {
+		t.Fatal("saved token inputs must remain visible with masked placeholders")
+	}
+	if strings.Contains(body, "data-token-change") || strings.Contains(body, "Change token") || strings.Contains(body, `id="kitsu-bot-token" type="password" name="kitsu_bot_token" autocomplete="new-password" aria-describedby="kitsu-token-help" data-token-input="kitsu" disabled`) {
+		t.Fatal("token inputs must be directly editable without unlock buttons")
+	}
+	if strings.Count(body, `>Cancel<`) != 1 {
+		t.Fatalf("expected exactly one page-level Cancel link, got %d", strings.Count(body, `>Cancel<`))
 	}
 	if strings.Count(body, `class="connection-advanced-details" id="connections-advanced"`) != 1 {
 		t.Fatal("advanced connection settings must use one restrained disclosure inside the Kitsu card")
-	}
-	if !strings.Contains(body, `value="https://api.kitsu.example.test"`) {
-		t.Fatal("saved API Base URL must remain editable inside advanced settings")
 	}
 	if strings.Contains(body, "An internal route used only by KitsuSync") || strings.Contains(body, "KitsuSyncだけが使う内部経路です") {
 		t.Fatal("advanced settings retained redundant internal-route helper copy")
@@ -440,25 +443,32 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 	if advanced < kitsuCard {
 		t.Fatal("advanced settings must be inside the Kitsu connection card")
 	}
-	for _, field := range []string{`name="kitsu_external_url"`, `name="kitsu_internal_url"`, `name="kitsu_api_base_url"`} {
-		if !strings.Contains(body[kitsuCard:], field) {
-			t.Fatalf("Kitsu connection card missing %s", field)
+	if !strings.Contains(body[kitsuCard:], `name="kitsu_external_url"`) {
+		t.Fatal("Kitsu connection card missing kitsu_external_url")
+	}
+	manualBody := renderConnectionsEditFormWithIdentityRows("en", httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&endpoint_mode=manual&lang=en", nil), db, "", "warn", "Needs review", "https://kitsu.example.test", false, false, "Test Bot")
+	if !strings.Contains(manualBody, `value="https://api.kitsu.example.test"`) {
+		t.Fatal("saved API Base URL must remain editable inside manual advanced settings")
+	}
+	for _, field := range []string{`name="kitsu_internal_url"`, `name="kitsu_api_base_url"`} {
+		if !strings.Contains(manualBody, field) {
+			t.Fatalf("manual endpoint mode missing %s", field)
 		}
 	}
-	if !strings.Contains(body, `data-kitsu-internal-endpoint hidden`) {
+	if !strings.Contains(manualBody, `data-kitsu-internal-endpoint hidden`) {
 		t.Fatal("internal Kitsu endpoint must stay hidden until a manual endpoint override")
 	}
 }
 
 func TestConnectionsEditShowsResolvedEndpointBeforeManualOverride(t *testing.T) {
 	body := renderConnectionsEditFormWithIdentityRows("en", httptest.NewRequest("GET", "/bot/admin/bot?edit=1&lang=en", nil), nil, "Review connections separately.", "warning", "Needs review", "https://kitsu.example.test/", false, false, "")
-	for _, want := range []string{"Kitsu host", "https://kitsu.example.test", "Kitsu endpoint (for API)", "Manual setup", "Automatic", `data-endpoint-mode="auto"`, `data-endpoint-mode="manual"`, `data-kitsu-endpoint-auto`, `data-kitsu-endpoint-manual hidden style="display:none"`, `data-kitsu-host-auto`, "setVisible", "setEndpointMode"} {
+	for _, want := range []string{"https://kitsu.example.test", "Kitsu endpoint (for API)", "Manual setup", "Automatic", `data-endpoint-mode="auto"`, `data-endpoint-mode="manual"`, `data-kitsu-endpoint-auto`, `data-kitsu-host-auto`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("resolved endpoint UI missing %q", want)
 		}
 	}
-	if got := strings.Count(body, `>Kitsu host<`); got != 1 {
-		t.Fatalf("automatic endpoint mode should render one Kitsu host label, got %d", got)
+	if strings.Contains(body, `data-kitsu-endpoint-manual`) || strings.Contains(body, `id="kitsu-hostname"`) {
+		t.Fatal("automatic endpoint mode must not render the manual endpoint panel in the DOM")
 	}
 	if strings.Contains(body, "Resolved Kitsu endpoint") || strings.Contains(body, "Expert network overrides") {
 		t.Fatal("normal endpoint UI retained obsolete or over-prominent copy")
@@ -469,8 +479,8 @@ func TestConnectionsEditShowsResolvedEndpointBeforeManualOverride(t *testing.T) 
 	if strings.Contains(body, `name="kitsu_hostname" value="Not configured"`) {
 		t.Fatal("resolved endpoint form must not submit the display placeholder")
 	}
-	if strings.Count(body, `<div data-kitsu-endpoint-auto>`) != 1 || strings.Count(body, `<div class="connection-host-manual" data-kitsu-endpoint-manual`) != 1 {
-		t.Fatal("automatic endpoint mode must keep one auto and one switchable manual slot")
+	if strings.Count(body, `<div data-kitsu-endpoint-auto>`) != 1 {
+		t.Fatal("automatic endpoint mode must render one auto slot")
 	}
 	if strings.Contains(body, "The saved token is never displayed. Recheck without entering it again") {
 		t.Fatal("token controls retained obsolete helper")
@@ -482,8 +492,8 @@ func TestConnectionsEditShowsResolvedEndpointBeforeManualOverride(t *testing.T) 
 
 func TestConnectionsEditManualEndpointUsesOneControl(t *testing.T) {
 	body := renderConnectionsEditFormWithIdentityRows("en", httptest.NewRequest("GET", "/bot/admin/bot?edit=1&lang=en", nil), nil, "", "warning", "Needs review", "", false, false, "")
-	if !strings.Contains(body, `data-kitsu-endpoint-auto hidden style="display:none"`) || !strings.Contains(body, `data-kitsu-host-auto disabled`) {
-		t.Fatal("manual endpoint mode must keep the automatic endpoint hidden and disabled")
+	if strings.Contains(body, `data-kitsu-endpoint-auto`) || strings.Contains(body, `data-kitsu-host-auto`) {
+		t.Fatal("manual endpoint mode must not render the automatic endpoint panel in the DOM")
 	}
 	if strings.Count(body, `id="kitsu-hostname"`) != 1 {
 		t.Fatal("manual endpoint mode must render exactly one editable host control")

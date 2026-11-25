@@ -2096,79 +2096,68 @@ func renderConnectionsEditFormWithExternalURLState(lang string, r *http.Request,
 		}
 		return `<p id="external-kitsu-url-error" class="conn-note" style="color:var(--danger)" role="alert">` + esc(externalURLSaveError) + `</p>`
 	}() + `</div>`
+	manualMode := resolvedHost == ""
+	detailsOpen := ""
+	if r != nil && r.URL != nil {
+		switch strings.TrimSpace(r.URL.Query().Get("endpoint_mode")) {
+		case "manual":
+			manualMode = true
+			detailsOpen = " open"
+		case "auto":
+			manualMode = false
+			detailsOpen = " open"
+		}
+	}
 	autoSelectedClass := " on"
 	manualSelectedClass := ""
-	manualHidden := ` hidden style="display:none"`
-	manualDisabled := " disabled"
-	autoInputDisabled := ""
-	if resolvedHost == "" {
+	if manualMode {
 		autoSelectedClass = ""
 		manualSelectedClass = " on"
-		manualHidden = ""
-		manualDisabled = ""
-		autoInputDisabled = " disabled"
 	}
-	advancedDetails := `<details class="connection-advanced-details" id="connections-advanced"><summary><span>` + esc(t(lang, "詳細設定", "Advanced settings")) + `</span><span class="chev">▸</span></summary>` +
+	endpointPanel := `<div data-kitsu-endpoint-auto><input type="hidden" id="kitsu-hostname-auto" name="kitsu_hostname" form="kitsu-connection-form" value="` + esc(resolvedHost) + `" data-kitsu-host-auto><p class="conn-note"><code>` + esc(displayHost) + `</code></p></div>`
+	if manualMode {
+		endpointPanel = `<div class="connection-host-manual" data-kitsu-endpoint-manual>` +
+			`<div class="connection-form-field"><label class="conn-field-label" for="kitsu-hostname">` + esc(tr(lang, "connections.host")) + `</label><input id="kitsu-hostname" type="url" name="kitsu_hostname" form="kitsu-connection-form" value="` + esc(resolvedHost) + `" data-initial-value="` + esc(resolvedHost) + `"></div>` +
+			`<div class="connection-form-field" data-kitsu-internal-endpoint hidden><label class="conn-field-label" for="kitsu-internal-url">` + esc(t(lang, "内部 Kitsu URL", "Internal Kitsu URL")) + `</label><input id="kitsu-internal-url" type="url" name="kitsu_internal_url" form="kitsu-connection-form" autocomplete="url"></div>` +
+			`<div class="connection-form-field"><label class="conn-field-label" for="kitsu-api-base-url">` + esc(t(lang, "API Base URL", "API Base URL")) + `</label><input id="kitsu-api-base-url" type="url" name="kitsu_api_base_url" form="kitsu-connection-form" value="` + esc(apiBaseURL) + `" autocomplete="url"></div>` +
+			`</div>`
+	}
+	advancedDetails := `<details class="connection-advanced-details" id="connections-advanced"` + detailsOpen + `><summary><span>` + esc(t(lang, "詳細設定", "Advanced settings")) + `</span><span class="chev">▸</span></summary>` +
 		`<div style="margin-top:12px;">` +
 		`<label class="conn-field-label">` + esc(t(lang, "Kitsu接続先（API用）", "Kitsu endpoint (for API)")) + `</label>` +
 		`<div class="seg" role="group" aria-label="` + esc(t(lang, "Kitsu接続先（API用）", "Kitsu endpoint (for API)")) + `">` +
-		`<button type="button" class="` + strings.TrimSpace(autoSelectedClass) + `" data-endpoint-mode="auto">` + esc(t(lang, "自動検出", "Automatic")) + `</button>` +
-		`<button type="button" class="` + strings.TrimSpace(manualSelectedClass) + `" data-endpoint-mode="manual">` + esc(t(lang, "手動設定", "Manual setup")) + `</button>` +
+		`<a class="` + strings.TrimSpace(autoSelectedClass) + `" href="` + esc(withLang("/bot/admin/bot?edit=1&endpoint_mode=auto", r)) + `" data-endpoint-mode="auto">` + esc(t(lang, "自動検出", "Automatic")) + `</a>` +
+		`<a class="` + strings.TrimSpace(manualSelectedClass) + `" href="` + esc(withLang("/bot/admin/bot?edit=1&endpoint_mode=manual", r)) + `" data-endpoint-mode="manual">` + esc(t(lang, "手動設定", "Manual setup")) + `</a>` +
 		`</div>` +
-		`<div data-kitsu-endpoint-auto` + func() string {
-		if resolvedHost == "" {
-			return ` hidden style="display:none"`
-		}
-		return ""
-	}() + `><input type="hidden" id="kitsu-hostname-auto" name="kitsu_hostname" form="kitsu-connection-form" value="` + esc(resolvedHost) + `" data-kitsu-host-auto` + autoInputDisabled + `><p class="conn-note"><code>` + esc(displayHost) + `</code></p></div>` +
-		`<div class="connection-host-manual" data-kitsu-endpoint-manual` + manualHidden + `>` +
-		`<div class="connection-form-field"><label class="conn-field-label" for="kitsu-hostname">` + esc(tr(lang, "connections.host")) + `</label><input id="kitsu-hostname" type="url" name="kitsu_hostname" form="kitsu-connection-form" value="` + esc(resolvedHost) + `" data-initial-value="` + esc(resolvedHost) + `"` + manualDisabled + `></div>` +
-		`<div class="connection-form-field" data-kitsu-internal-endpoint hidden><label class="conn-field-label" for="kitsu-internal-url">` + esc(t(lang, "内部 Kitsu URL", "Internal Kitsu URL")) + `</label><input id="kitsu-internal-url" type="url" name="kitsu_internal_url" form="kitsu-connection-form" autocomplete="url"></div>` +
-		`<div class="connection-form-field"><label class="conn-field-label" for="kitsu-api-base-url">` + esc(t(lang, "API Base URL", "API Base URL")) + `</label><input id="kitsu-api-base-url" type="url" name="kitsu_api_base_url" form="kitsu-connection-form" value="` + esc(apiBaseURL) + `" autocomplete="url"></div>` +
-		`</div></div></details>`
+		endpointPanel +
+		`</div></details>`
 	kitsuTokenInput := `<input id="kitsu-bot-token" type="password" name="kitsu_bot_token" autocomplete="new-password" aria-describedby="kitsu-token-help" data-token-input="kitsu"` + func() string {
 		if kitsuConfigured {
-			return ` disabled placeholder="` + esc(connectionSecretMask) + `"`
+			return ` placeholder="` + esc(connectionSecretMask) + `"`
 		}
 		return ""
 	}() + `>`
 	discordTokenInput := `<input id="discord-bot-token" type="password" name="bot_token" autocomplete="new-password" aria-describedby="discord-token-help" data-token-input="discord"` + func() string {
 		if discordConfigured {
-			return ` disabled placeholder="` + esc(connectionSecretMask) + `"`
+			return ` placeholder="` + esc(connectionSecretMask) + `"`
 		}
 		return ""
 	}() + `>`
-	kitsuTokenActions := ""
-	if kitsuConfigured {
-		kitsuTokenActions = `<button type="button" class="btn-ghost" data-token-change="kitsu-bot-token" data-token-cancel="kitsu-token-cancel" data-token-submit="kitsu-recheck">` + esc(t(lang, "トークンを変更", "Change token")) + `</button><button type="button" class="btn-ghost" data-token-cancel-button="kitsu-token-cancel" hidden>` + esc(t(lang, "キャンセル", "Cancel")) + `</button>`
-	}
-	discordTokenActions := ""
-	if discordConfigured {
-		discordTokenActions = `<button type="button" class="btn-ghost" data-token-change="discord-bot-token" data-token-cancel="discord-token-cancel" data-token-submit="discord-recheck">` + esc(t(lang, "トークンを変更", "Change token")) + `</button><button type="button" class="btn-ghost" data-token-cancel-button="discord-token-cancel" hidden>` + esc(t(lang, "キャンセル", "Cancel")) + `</button>`
-	}
 	discordStatusNote := t(lang, "Botトークンがまだ設定されていません。", "Bot token is not configured yet.")
 	if discordConfigured && discordHealthy {
 		discordStatusNote = t(lang, "Discord Botは接続済みです。", "Discord Bot is connected.")
 	} else if discordConfigured {
 		discordStatusNote = t(lang, "Discord Botの接続を確認してください。", "Check the Discord Bot connection.")
 	}
-	body := `<div class="section-stack connections-edit-stack" id="connections-edit">` + notice +
+	pageCancel := `<div class="button-row connections-navigation"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "キャンセル", "Cancel")) + `</a></div>`
+	body := `<div class="section-stack connections-edit-stack" id="connections-edit">` + pageCancel + notice +
 		`<div class="connections-edit-grid">` +
 		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><span class="status-pill ` + esc(kitsuStatus.Class) + `" role="status">` + esc(kitsuStatus.Label) + `</span></div>` +
-		`<form method="POST" class="connection-save-form" id="kitsu-connection-form"><input type="hidden" name="action" value="save_kitsu"><div class="connection-form-field"><label class="conn-field-label" for="kitsu-bot-token">` + esc(t(lang, "Kitsu Bot APIトークン", "Kitsu Bot API token")) + `</label>` + kitsuTokenInput + `</div>` + externalURLField + advancedDetails + `<div class="button-row connections-actions conn-card-actions"><button id="kitsu-recheck" type="submit" class="btn">` + esc(connectionSaveLabel(lang, "Kitsu", kitsuConfigured)) + `</button>` + kitsuTokenActions + `<a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "キャンセル", "Cancel")) + `</a></div></form>` +
+		`<form method="POST" class="connection-save-form" id="kitsu-connection-form"><input type="hidden" name="action" value="save_kitsu"><div class="connection-form-field"><label class="conn-field-label" for="kitsu-bot-token">` + esc(t(lang, "Kitsu Bot APIトークン", "Kitsu Bot API token")) + `</label>` + kitsuTokenInput + `</div>` + externalURLField + advancedDetails + `<div class="button-row connections-actions conn-card-actions"><button id="kitsu-recheck" type="submit" class="btn">` + esc(connectionSaveLabel(lang, "Kitsu", kitsuConfigured)) + `</button></div></form>` +
 		`<form method="POST" id="external-kitsu-url-form" hidden><input type="hidden" name="action" value="save_external_kitsu_url"></form></section>` +
 		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><span class="status-pill ` + esc(discordStatus.Class) + `" role="status">` + esc(discordStatus.Label) + `</span></div>` +
-		`<form method="POST" class="connection-save-form"><input type="hidden" name="action" value="save_discord"><div class="connection-form-field"><label class="conn-field-label" for="discord-bot-token">` + esc(t(lang, "Discord Botトークン", "Discord Bot Token")) + `</label>` + discordTokenInput + `</div><p class="conn-note" style="margin-top:10px;">` + esc(discordStatusNote) + `</p><div class="connection-field-row"><dt>` + esc(t(lang, "Bot", "Bot")) + `</dt><dd>` + esc(identity) + `</dd></div><div class="button-row connections-actions conn-card-actions"><button id="discord-recheck" type="submit" class="btn">` + esc(connectionSaveLabel(lang, "Discord Bot", discordConfigured)) + `</button>` + discordTokenActions + `</div></form></section>` +
-		`</div><div class="button-row connections-navigation connections-footer"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(t(lang, "プロダクション一覧へ戻る", "Back to Productions")) + `</a></div><script>(function(){var saveText='` + esc(t(lang, "変更を保存", "Save changes")) + `';document.querySelectorAll('[data-token-change]').forEach(function(button){var input=document.getElementById(button.getAttribute('data-token-change')),cancel=document.querySelector('[data-token-cancel-button="'+button.getAttribute('data-token-cancel')+'"]'),submit=document.getElementById(button.getAttribute('data-token-submit'));if(!input)return;button.addEventListener('click',function(){input.disabled=false;input.value='';input.placeholder='';button.hidden=true;if(cancel)cancel.hidden=false;if(submit)submit.textContent=saveText;input.focus();});if(cancel)cancel.addEventListener('click',function(){input.value='';input.disabled=true;input.placeholder='` + esc(connectionSecretMask) + `';button.hidden=false;cancel.hidden=true;if(submit)submit.textContent=saveText;});});var host=document.getElementById('kitsu-hostname');var hostSubmit=document.getElementById('kitsu-recheck');if(host&&hostSubmit){host.addEventListener('input',function(){if(host.value!==host.getAttribute('data-initial-value'))hostSubmit.textContent=saveText;});}var externalURL=document.getElementById('kitsu-external-url'),externalURLSaveButton=document.getElementById('save-external-kitsu-url');if(externalURL&&externalURLSaveButton){function updateExternalURLSaveState(){externalURLSaveButton.disabled=externalURL.value===externalURL.getAttribute('data-initial-value');}externalURL.addEventListener('input',updateExternalURLSaveState);updateExternalURLSaveState();}}());</script></div>`
-	endpointScript := `<script>(function(){var autoField=document.querySelector('[data-kitsu-endpoint-auto]'),manualField=document.querySelector('[data-kitsu-endpoint-manual]'),autoInput=document.querySelector('[data-kitsu-host-auto]'),host=document.getElementById('kitsu-hostname'),internal=document.querySelector('[data-kitsu-internal-endpoint]'),autoBtn=document.querySelector('[data-endpoint-mode="auto"]'),manualBtn=document.querySelector('[data-endpoint-mode="manual"]');function setVisible(node,visible){if(!node)return;node.hidden=!visible;node.style.display=visible?'':'none';}function setEndpointMode(manual){setVisible(autoField,!manual);setVisible(manualField,manual);if(autoInput)autoInput.disabled=manual;if(host)host.disabled=!manual;if(internal)internal.hidden=!manual;if(autoBtn)autoBtn.classList.toggle('on',!manual);if(manualBtn)manualBtn.classList.toggle('on',manual);}if(manualBtn)manualBtn.addEventListener('click',function(){setEndpointMode(true);if(host)host.focus();});if(autoBtn)autoBtn.addEventListener('click',function(){if(autoInput&&host)host.value=autoInput.value;setEndpointMode(false);});setEndpointMode(` + func() string {
-		if resolvedHost == "" {
-			return "true"
-		}
-		return "false"
-	}() + `);})();</script>`
-	if end := strings.LastIndex(body, `</div>`); end >= 0 {
-		body = body[:end] + endpointScript + body[end:]
-	}
+		`<form method="POST" class="connection-save-form"><input type="hidden" name="action" value="save_discord"><div class="connection-form-field"><label class="conn-field-label" for="discord-bot-token">` + esc(t(lang, "Discord Botトークン", "Discord Bot Token")) + `</label>` + discordTokenInput + `</div><p class="conn-note" style="margin-top:10px;">` + esc(discordStatusNote) + `</p><div class="connection-field-row"><dt>` + esc(t(lang, "Bot", "Bot")) + `</dt><dd>` + esc(identity) + `</dd></div><div class="button-row connections-actions conn-card-actions"><button id="discord-recheck" type="submit" class="btn">` + esc(connectionSaveLabel(lang, "Discord Bot", discordConfigured)) + `</button></div></form></section>` +
+		`</div><div class="button-row connections-navigation connections-footer"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(t(lang, "プロダクション一覧へ戻る", "Back to Productions")) + `</a></div><script>(function(){var saveText='` + esc(t(lang, "変更を保存", "Save changes")) + `';var host=document.getElementById('kitsu-hostname');var hostSubmit=document.getElementById('kitsu-recheck');if(host&&hostSubmit){host.addEventListener('input',function(){if(host.value!==host.getAttribute('data-initial-value'))hostSubmit.textContent=saveText;});}var externalURL=document.getElementById('kitsu-external-url'),externalURLSaveButton=document.getElementById('save-external-kitsu-url');if(externalURL&&externalURLSaveButton){function updateExternalURLSaveState(){externalURLSaveButton.disabled=externalURL.value===externalURL.getAttribute('data-initial-value');}externalURL.addEventListener('input',updateExternalURLSaveState);updateExternalURLSaveState();}}());</script></div>`
 	return body
 }
 
@@ -2578,7 +2567,6 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 			return
 		}
 
-		kitsuEmail := storedRuntimeKitsuEmail(db)
 		sharedReadiness := sharedBotRuntimeReadiness(db, effectiveHost, storedRuntimeDiscordBotToken(db))
 		kitsuHealthy := false
 		if runtimeHealthy != nil {
@@ -2621,28 +2609,9 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 			fmt.Fprint(w, adminPage(lang, t(lang, "共有Bot / Runtime 設定", "Shared Bot / Runtime"), r, view))
 			return
 		}
-		if editMode {
-			form := renderConnectionsEditFormWithHealth(lang, r, db, statusHint, statusClass, statusLabel, effectiveHost, kitsuHealthy, discordHealthy, discordStatus.BotName)
-			fmt.Fprint(w, adminPage(lang, tr(lang, "connections.title"), r, form))
-			return
-		}
-		edit := fmt.Sprintf(`
-<div class="section-stack">
-  %s
-  <form method="POST" class="section-stack">
-    <div class="section-card glass"><h3>%s</h3><div class="form-grid">
-      <div class="form-span-2"><label>Kitsu hostname</label><input type="text" value="%s" readonly></div>
-      <div class="form-span-2"><label>Discord Bot Token</label><input type="password" name="bot_token" autocomplete="new-password" placeholder="%s"><p class="field-help">%s</p><p class="field-help">%s</p></div>
-    </div></div>
-    <div class="section-card glass"><h3>%s</h3><div class="form-grid">
-      <div><label>%s</label><input type="email" name="kitsu_runtime_email" value="%s" placeholder="kitsusync-bot@local.invalid"></div>
-      <div><label>%s</label><input type="password" name="kitsu_runtime_password" autocomplete="new-password" placeholder="%s"></div>
-    </div></div>
-    <div class="button-row"><a class="btn-ghost" href="%s">%s</a><a class="btn-ghost" href="%s">%s</a><button type="submit" class="btn">%s</button></div>
-  </form>
-</div>`,
-			authNoticeHTML(lang, t(lang, "再認証済み", "Re-authenticated"), t(lang, "編集モードは一時的に有効です。", "Edit mode is temporarily enabled.")), t(lang, "Discord 設定", "Discord settings"), esc(effectiveHost), t(lang, "必要な時だけ新しい Token を入力してください。", "Only paste a new token when rotating it."), t(lang, "このトークン変更は現在実行中のプロセスに即時反映され、アプリ設定にも保存されます。", "Token changes take effect immediately for the running process and are also saved in app settings."), t(lang, "再起動後は保存済み token が優先されます。.env.local / 環境変数は fallback としてのみ使われます。", "After restart, the saved token is used first. .env.local / environment variables remain fallback sources only."), t(lang, "Kitsu Runtime 接続", "Kitsu runtime connection"), t(lang, "Runtime メール", "Runtime email"), esc(kitsuEmail), t(lang, "Runtime パスワード", "Runtime password"), t(lang, "必要な時だけ専用 Runtime パスワードを入力してください。", "Only paste a new dedicated runtime password when rotating it."), withLang("/bot/setup", r), t(lang, "新規連携セットアップへ戻る", "Back to New Connection Setup"), withLang("/bot/admin/projects", r), t(lang, "連携済みプロダクション管理を開く", "Open Connected Productions"), t(lang, "保存", "Save"))
-		fmt.Fprint(w, adminPage(lang, t(lang, "Bot設定", "Bot Settings"), r, edit))
+		form := renderConnectionsEditFormWithHealth(lang, r, db, statusHint, statusClass, statusLabel, effectiveHost, kitsuHealthy, discordHealthy, discordStatus.BotName)
+		fmt.Fprint(w, adminPage(lang, tr(lang, "connections.title"), r, form))
+		return
 	}
 }
 

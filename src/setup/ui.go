@@ -1212,8 +1212,8 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .flat-section-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
   .flat-section-head h2{margin:0}
   .seg{display:inline-flex;border:1px solid var(--line);border-radius:16px;background:rgba(255,255,255,.03);padding:2px;gap:2px}
-  .seg button{height:28px;padding:0 16px;border:0;border-radius:14px;background:transparent;color:var(--muted);font-size:13px;cursor:pointer;font-family:inherit}
-  .seg button.on{background:var(--accent-2);color:#221503;font-weight:700}
+  .seg button,.seg a{height:28px;padding:0 16px;border:0;border-radius:14px;background:transparent;color:var(--muted);font-size:13px;cursor:pointer;font-family:inherit;text-decoration:none;display:inline-flex;align-items:center}
+  .seg button.on,.seg a.on{background:var(--accent-2);color:#221503;font-weight:700}
   .connection-advanced-details{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
   .connection-advanced-details>summary{cursor:pointer;font-size:13.5px;font-weight:600;display:flex;align-items:center;justify-content:space-between;list-style:none}
   .connection-advanced-details>summary::-webkit-details-marker{display:none}

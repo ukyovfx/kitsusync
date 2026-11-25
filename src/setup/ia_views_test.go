@@ -530,10 +530,13 @@ func TestNotificationsHasNoNormalPauseResumeControls(t *testing.T) {
 			t.Fatalf("normal Notifications UI exposes retired control %q", forbidden)
 		}
 	}
-	for _, want := range []string{"Kitsu Task Type", "Forum", "Edit"} {
+	for _, want := range []string{"Kitsu Task Type", "Forum"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Notifications UI missing %q", want)
 		}
+	}
+	if strings.Contains(body, `edit_routing=1`) {
+		t.Fatal("empty Notifications UI must hide the Edit link when no routes exist")
 	}
 	if strings.Contains(body, "Notification routing") {
 		t.Fatal("Notifications read mode should not repeat the tab's routing heading")
@@ -673,6 +676,21 @@ func TestAuditLogProductionFilterNarrowsRows(t *testing.T) {
 	unknown := render("/bot/admin/audit?lang=en&production=Missing")
 	if !strings.Contains(unknown, `data-label="Production">Alpha Production`) || !strings.Contains(unknown, `data-label="Production">Beta Production`) {
 		t.Fatal("an unknown production filter must fall back to all rows")
+	}
+}
+
+func TestAuditFilterHiddenWhenNoLogs(t *testing.T) {
+	db := newIAViewDB(t)
+	w := httptest.NewRecorder()
+	renderIAAudit(w, httptest.NewRequest("GET", "/bot/admin/audit?lang=en", nil), db)
+	body := w.Body.String()
+	for _, unwanted := range []string{`class="audit-filter-form"`, `id="audit-filter-production"`, `id="audit-filter-user"`, `id="audit-filter-result"`} {
+		if strings.Contains(body, unwanted) {
+			t.Fatalf("empty audit page must not render %q", unwanted)
+		}
+	}
+	if !strings.Contains(body, "No audit log entries") {
+		t.Fatal("empty audit page must still render empty-state table row")
 	}
 }
 
@@ -1055,15 +1073,25 @@ func TestWizardLiveProductionSelectionTargetsServerStep(t *testing.T) {
 	}
 }
 
+func stubWizardGuildLister(t *testing.T, guilds []DiscordGuild, err error) {
+	t.Helper()
+	old := wizardGuildLister
+	t.Cleanup(func() { wizardGuildLister = old })
+	wizardGuildLister = func(string) ([]DiscordGuild, error) {
+		return guilds, err
+	}
+}
+
 // F1: GET wizard forms must carry lang, otherwise the browser drops the query
 // and shellHeadExtras() re-adds it with a full page reload.
 func TestWizardGetFormsCarryLanguage(t *testing.T) {
+	stubWizardGuildLister(t, []DiscordGuild{{ID: "123456789012345678", Name: "Synthetic Guild"}}, nil)
 	db := newIAViewDB(t)
 	r := httptest.NewRequest("GET", "/bot/setup?lang=en&wizard_step=4&project=live-production-id&plan_guild=123456789012345678", nil)
 	production := KitsuProject{ID: "live-production-id", Name: "Live Production"}
 	forms := map[string]string{
 		"production": renderWizardProductionLocalized("en", r, db, []KitsuProject{production}, nil),
-		"server":     renderWizardServer("en", r, "", production.ID),
+		"server":     renderWizardServer("en", r, "bot-token", production.ID),
 	}
 	for name, body := range forms {
 		if !strings.Contains(body, `<input type="hidden" name="lang" value="en">`) {
@@ -1078,12 +1106,13 @@ func TestWizardGetFormsCarryLanguage(t *testing.T) {
 // F2: the repair link only sets repair on its first GET, so every wizard form
 // and the wizard links must carry it forward or the repair falls back to step 1.
 func TestWizardRepairModeCarriesThroughFormsAndLinks(t *testing.T) {
+	stubWizardGuildLister(t, []DiscordGuild{{ID: "123456789012345678", Name: "Synthetic Guild"}}, nil)
 	db := newIAViewDB(t)
 	r := httptest.NewRequest("GET", "/bot/setup?lang=en&wizard_step=4&repair=1&project=live-production-id&plan_guild=123456789012345678", nil)
 	production := KitsuProject{ID: "live-production-id", Name: "Live Production"}
 	forms := map[string]string{
 		"production": renderWizardProductionLocalized("en", r, db, []KitsuProject{production}, nil),
-		"server":     renderWizardServer("en", r, "", production.ID),
+		"server":     renderWizardServer("en", r, "bot-token", production.ID),
 	}
 	for name, body := range forms {
 		if !strings.Contains(body, `<input type="hidden" name="repair" value="1">`) {
@@ -1094,7 +1123,7 @@ func TestWizardRepairModeCarriesThroughFormsAndLinks(t *testing.T) {
 		t.Fatalf("wizard link dropped repair mode: %s", link)
 	}
 	plain := httptest.NewRequest("GET", "/bot/setup?lang=en&wizard_step=4&project=live-production-id", nil)
-	if strings.Contains(renderWizardServer("en", plain, "", production.ID), `name="repair"`) {
+	if strings.Contains(renderWizardServer("en", plain, "bot-token", production.ID), `name="repair"`) {
 		t.Fatal("repair input leaked into a normal wizard run")
 	}
 	if sqlDB, err := db.DB(); err == nil {
@@ -1115,6 +1144,37 @@ func TestWizardProductionLookupStateDistinguishesEmptyAndFailure(t *testing.T) {
 	}
 	if strings.Contains(empty, "Production list could not be loaded from Kitsu") || strings.Contains(failure, "Kitsu returned no Productions") {
 		t.Fatal("empty and failure states were conflated")
+	}
+	for name, body := range map[string]string{"empty": empty, "failure": failure} {
+		if strings.Contains(body, `<select`) || strings.Contains(body, `type="submit"`) {
+			t.Fatalf("%s state must hide empty select and Next button", name)
+		}
+		if !strings.Contains(body, `href="/bot/admin/bot?lang=en"`) {
+			t.Fatalf("%s state must include link to /bot/admin/bot", name)
+		}
+	}
+}
+
+func TestWizardServerHidesFormWhenEmptyOrUnavailable(t *testing.T) {
+	r := httptest.NewRequest("GET", "/bot/setup?lang=en&wizard_step=3&project=p1", nil)
+	noToken := renderWizardServer("en", r, "", "p1")
+
+	stubWizardGuildLister(t, nil, errors.New("discord unreachable"))
+	fetchErr := renderWizardServer("en", r, "bot-token", "p1")
+
+	stubWizardGuildLister(t, nil, nil)
+	empty := renderWizardServer("en", r, "bot-token", "p1")
+
+	for name, body := range map[string]string{"noToken": noToken, "fetchErr": fetchErr, "empty": empty} {
+		if strings.Contains(body, `<select`) || strings.Contains(body, `type="submit"`) {
+			t.Fatalf("%s state must hide empty select and Next button", name)
+		}
+		if !strings.Contains(body, `href="/bot/admin/bot?lang=en"`) {
+			t.Fatalf("%s state must include link to /bot/admin/bot", name)
+		}
+		if !strings.Contains(body, `wizard_step=2`) {
+			t.Fatalf("%s state must include back link to step 2", name)
+		}
 	}
 }
 
@@ -1731,6 +1791,12 @@ func TestCurrentNotificationRoutingIsReadOnlyUntilExplicitEdit(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "summary-routing", Name: "Summary Routing"}
 	db.Create(&p)
+	if err := db.Create(&model.ProductionForumConfig{ProductionID: p.KitsuProjectID, GuildID: "g1"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.ProductionForumRoute{ProductionID: p.KitsuProjectID, TaskTypeID: "tt-anim", TaskTypeName: "Animation", ForumChannelID: "f-anim", ForumChannelName: "animation"}).Error; err != nil {
+		t.Fatal(err)
+	}
 	body := renderSelectedProductionNotifications(db, httptest.NewRequest("GET", "/bot/admin/projects?project=summary-routing&tab=notifications&lang=en", nil), p, "en", "ok", "Healthy", "")
 	if strings.Contains(body, `name="action" value="save"`) {
 		t.Fatal("default routing view exposed an edit form")

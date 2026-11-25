@@ -560,6 +560,10 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 			`</div></div>`)
 	}
 
+	if len(taskTypes) == 0 {
+		overrideRows.WriteString(`<p class="state-explanation" role="status">` + esc(t(lang, "このプロダクションのタスクタイプが見つかりませんでした。Kitsu接続を確認してください。", "No task types were found for this Production. Check the Kitsu connection.")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(tr(lang, "ia.bot_connection")) + `</a></div>`)
+	}
+
 	fallbackOptionsList := make([][2]string, 0, len(handoffFallbackOptions))
 	for _, fallback := range handoffFallbackOptions {
 		fallbackOptionsList = append(fallbackOptionsList, [2]string{fallback, handoffFallbackLabel(lang, fallback)})
@@ -569,11 +573,14 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 	if noAssigneeValue == "" {
 		noAssigneeValue = model.HandoffFallbackDisabled
 	}
-	fallbackUserHidden := ""
-	if noAssigneeValue != model.HandoffFallbackUsers {
-		fallbackUserHidden = " hidden"
+	fallbackField := ""
+	if noAssigneeValue == model.HandoffFallbackUsers {
+		fallbackUserOptions := handoffFallbackMemberOptions(db, project.DiscordGuildID, config.FallbackUserID, lang)
+		fallbackField = `<div id="handoff-fallback-user-field">` +
+			`<label class="conn-field-label" for="handoff-fallback-user">` + esc(t(lang, "通知するメンバー", "Member to notify")) + `</label>` +
+			`<select id="handoff-fallback-user" name="fallback_user">` + fallbackUserOptions + `</select>` +
+			`</div>`
 	}
-	fallbackUserOptions := handoffFallbackMemberOptions(db, project.DiscordGuildID, config.FallbackUserID, lang)
 	form := `<form method="post" action="` + esc(withLang("/bot/admin/handoff", r)) + `" class="` + formClass + `" data-handoff-override-root data-empty-label="` + esc(t(lang, "行き先を追加してください", "Add a destination")) + `">` +
 		`<input type="hidden" name="project" value="` + esc(productionID) + `">` +
 		`<section class="flat-section"><h2>` + esc(t(lang, "この製作の上書き", "Overrides for this Production")) + `</h2>` +
@@ -582,11 +589,8 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 		`<section class="flat-section"><h2>` + esc(t(lang, "担当者なしの扱い", "When nobody is assigned")) + `</h2>` +
 		`<label class="conn-field-label" for="handoff-noassignee">` + esc(t(lang, "担当者なしの通知先", "Recipient when nobody is assigned")) + `</label>` +
 		forumSelect("no_assignee", noAssigneeValue, fallbackOptionsList, "") +
-		`<p class="conn-note">` + esc(t(lang, "「指定したユーザーに通知」を選ぶと、通知先のメンバー選択欄が表示されます。", "Choosing \"Notify a chosen user\" reveals the member selector.")) + `</p>` +
-		`<div id="handoff-fallback-user-field"` + fallbackUserHidden + `>` +
-		`<label class="conn-field-label" for="handoff-fallback-user">` + esc(t(lang, "通知するメンバー", "Member to notify")) + `</label>` +
-		`<select id="handoff-fallback-user" name="fallback_user">` + fallbackUserOptions + `</select>` +
-		`</div>` +
+		`<p class="conn-note">` + esc(t(lang, "「指定したユーザーに通知」を選んで保存すると、通知先のメンバー選択欄が表示されます。", "Save \"Notify a chosen user\" to show the member selector.")) + `</p>` +
+		fallbackField +
 		`</section>` +
 		`<div class="button-row">` +
 		`<a class="btn-ghost" data-route-back` + normalHidden + ` href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)) + `">` + esc(t(lang, "通知設定に戻る", "Back to notifications")) + `</a> ` +
