@@ -862,7 +862,6 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 	} else {
 		team, teamErr = reviewerProductionTeamReader(db, p.KitsuProjectID)
 	}
-	taskTypes := reviewerTaskTypesForProduction(db, p.KitsuProjectID)
 	globalUsers := filterAssignableUsers(model.ListUserMap(db), botAccountEmail(db))
 	botToken := ""
 	if len(botTokens) > 0 {
@@ -894,8 +893,6 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 		}
 	}
 	editable := !p.ValidationOnly && !p.ReadOnlyPreview && teamErr == nil && guildReadOK && len(selectableMembers) > 0
-	supervisorSummaries := productionSupervisorTaskTypeSummaries(team, taskTypes)
-	departmentNames := productionDepartmentNames(taskTypes)
 
 	userText := func(ja, en string) string { return t(lang, ja, en) }
 	memberSelect := func(person kitsu.Person, currentID string) string {
@@ -932,15 +929,9 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 			} else {
 				role = strings.ToUpper(role[:1]) + role[1:]
 			}
-			departments := productionPersonDepartmentSummary(person, departmentNames)
-			if departments == "" {
-				departments = userText("—", "—")
-			}
-			scope := userText("—", "—")
-			if strings.EqualFold(role, "Supervisor") {
-				if summary := supervisorSummaries[strings.TrimSpace(person.ID)]; summary != "" {
-					scope = summary
-				}
+			position := strings.TrimSpace(person.Position)
+			if position == "" {
+				position = userText("—", "—")
 			}
 			discordCell := `<span class="field-help">—</span>`
 			statusCell := `<span class="status-pill warning" role="status">` + esc(userText("要確認", "Needs review")) + `</span>`
@@ -970,20 +961,16 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 			if editable {
 				discordCell = memberSelect(person, currentDiscordID)
 				if currentDiscordID != "" {
-					statusCell += ` <button type="submit" name="unlink_team_kitsu_id" value="` + esc(strings.TrimSpace(person.ID)) + `" class="btn-ghost sm">` + esc(userText("解除", "Unlink")) + `</button>`
+					statusCell = `<span class="production-team-status-inline">` + statusCell + `<button type="submit" name="unlink_team_kitsu_id" value="` + esc(strings.TrimSpace(person.ID)) + `" class="btn-ghost sm">` + esc(userText("解除", "Unlink")) + `</button></span>`
 				}
 			}
-			scopeMarkup := ""
-			if strings.EqualFold(role, "Supervisor") && scope != userText("—", "—") {
-				scopeMarkup = `<small class="production-team-supervisor-scope" title="` + esc(scope) + `"><span class="production-team-label">` + esc(userText("Supervisor範囲", "Supervision scope")) + `</span> ` + esc(scope) + `</small>`
-			}
-			members.WriteString(`<tr class="production-team-row"><th scope="row" class="production-team-cell production-team-member"><strong title="` + esc(kitsuPersonDisplayName(person)) + `">` + esc(kitsuPersonDisplayName(person)) + `</strong></th><td class="production-team-cell" data-label="` + esc(userText("Kitsuロール", "Kitsu role")) + `">` + esc(role) + `</td><td class="production-team-cell" data-label="Department"><span>` + esc(departments) + `</span>` + scopeMarkup + `</td><td class="production-team-cell production-team-discord" data-label="Discord">` + discordCell + `</td><td class="production-team-cell production-team-status" data-label="` + esc(userText("状態", "Status")) + `">` + statusCell + `</td></tr>`)
+			members.WriteString(`<tr class="production-team-row"><th scope="row" class="production-team-cell production-team-member"><strong title="` + esc(kitsuPersonDisplayName(person)) + `">` + esc(kitsuPersonDisplayName(person)) + `</strong></th><td class="production-team-cell" data-label="` + esc(userText("Kitsuロール", "Kitsu role")) + `">` + esc(role) + `</td><td class="production-team-cell" data-label="` + esc(userText("役職", "Position")) + `">` + esc(position) + `</td><td class="production-team-cell production-team-discord" data-label="Discord">` + discordCell + `</td><td class="production-team-cell production-team-status" data-label="` + esc(userText("状態", "Status")) + `">` + statusCell + `</td></tr>`)
 		}
 		if members.Len() == 0 {
 			members.WriteString(`<tr><td colspan="5"><div class="empty-state" role="status"><strong>` + esc(userText("Kitsuのプロダクションチームは空です", "The Kitsu Production Team is empty")) + `</strong></div></td></tr>`)
 		}
 	}
-	tableHTML := `<div class="table-wrap production-team-table-wrap"><table class="production-team-table"><colgroup><col class="production-team-col-member"><col class="production-team-col-role"><col class="production-team-col-department"><col class="production-team-col-discord"><col class="production-team-col-status"></colgroup><thead><tr><th scope="col">` + esc(userText("メンバー", "Member")) + `</th><th scope="col">` + esc(userText("Kitsuロール", "Kitsu role")) + `</th><th scope="col">Department</th><th scope="col">Discord</th><th scope="col">` + esc(userText("状態", "Status")) + `</th></tr></thead><tbody>` + members.String() + `</tbody></table></div>`
+	tableHTML := `<div class="table-wrap production-team-table-wrap"><table class="production-team-table"><colgroup><col class="production-team-col-member"><col class="production-team-col-role"><col class="production-team-col-position"><col class="production-team-col-discord"><col class="production-team-col-status"></colgroup><thead><tr><th scope="col">` + esc(userText("メンバー", "Member")) + `</th><th scope="col">` + esc(userText("Kitsuロール", "Kitsu role")) + `</th><th scope="col">` + esc(userText("役職", "Position")) + `</th><th scope="col">Discord</th><th scope="col">` + esc(userText("状態", "Status")) + `</th></tr></thead><tbody>` + members.String() + `</tbody></table></div>`
 	if editable && members.Len() > 0 {
 		tableHTML = `<form method="POST" action="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=team", r)) + `" data-team-link-form>` +
 			`<input type="hidden" name="action" value="save_team_links">` +
@@ -992,7 +979,7 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 			tableHTML +
 			`<div class="button-row"><button type="submit" class="btn">` + esc(userText("変更を保存", "Save changes")) + `</button></div></form>`
 	}
-	return `<section id="production-team" class="production-team-page"><h2>` + esc(userText("チーム", "Team")) + `</h2><p class="field-help">` + esc(userText("メンバーとロールはKitsuから読み取り専用で表示します。Supervisor範囲はDepartmentとProductionのTask Typeから導出され、実際のタスク割り当てを示すものではありません。この場でDiscordユーザーとの紐づけや解除を保存できます。", "Members and roles are read-only from Kitsu. Supervisor scope is derived from Departments and this Production's Task Types; it does not indicate actual task assignments. You can link or unlink Discord users here.")) + `</p>` + guildNoticeMarkup(guildNotice) + tableHTML + `</section>`
+	return `<section id="production-team" class="production-team-page"><h2>` + esc(userText("チーム", "Team")) + `</h2><p class="field-help">` + esc(userText("メンバーはKitsuから読み取り専用で表示します。この場でDiscordユーザーとの紐づけや解除を保存できます。", "Members are shown read-only from Kitsu. You can link or unlink Discord users here.")) + `</p>` + guildNoticeMarkup(guildNotice) + tableHTML + `</section>`
 }
 
 func productionDepartmentNames(taskTypes []kitsu.TaskType) map[string]string {

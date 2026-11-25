@@ -1863,17 +1863,19 @@ func TestCurrentProductionTeamRendersSimpleReadOnlyFlow(t *testing.T) {
 	db.Create(&model.UserMap{KitsuName: "Linked Human", KitsuEmail: "human@example.com", DiscordID: "discord-human", DiscordDisplayName: "Discord Human"})
 	oldReader := reviewerProductionTeamReader
 	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
-		return []kitsu.Person{{ID: "team-person", FullName: "Linked Human", Role: "artist"}}, nil
+		return []kitsu.Person{{ID: "team-person", FullName: "Linked Human", Role: "artist", Position: "Lead Animator"}}, nil
 	}
-	oldTasks := reviewerTaskTypesForProduction
-	reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType {
-		return []kitsu.TaskType{{ID: "task-animation", Name: "Animation"}}
-	}
-	t.Cleanup(func() { reviewerProductionTeamReader, reviewerTaskTypesForProduction = oldReader, oldTasks })
+	t.Cleanup(func() { reviewerProductionTeamReader = oldReader })
 	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=simple-flow-production&tab=team&lang=en", nil), p, "en")
-	for _, want := range []string{"Team", "Kitsu role", "Linked Human", "Artist", "Department"} {
+	for _, want := range []string{"Team", "Kitsu role", "Linked Human", "Artist", "Position", "Lead Animator", "Members are shown read-only from Kitsu. You can link or unlink Discord users here."} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("simple flow missing %q: %s", want, body)
+		}
+	}
+	bodyJA := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=simple-flow-production&tab=team&lang=ja", nil), p, "ja")
+	for _, want := range []string{"役職", "メンバーはKitsuから読み取り専用で表示します。この場でDiscordユーザーとの紐づけや解除を保存できます。"} {
+		if !strings.Contains(bodyJA, want) {
+			t.Fatalf("simple flow (ja) missing %q: %s", want, bodyJA)
 		}
 	}
 	if strings.Contains(body, `class="production-team-supervisor-scope"`) {
@@ -1927,7 +1929,11 @@ func TestCurrentProductionUsersUseKitsuTeamInsteadOfManualAssociations(t *testin
 	t.Cleanup(func() { reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldReader, oldMembers })
 
 	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=kitsu-team-production&tab=users&lang=en", nil), project, "en", "synthetic-token")
-	for _, want := range []string{"Team", "Linked Person", "@ukyo", "Linked", "Unlinked Person", "Needs review", "Kitsu role"} {
+	for _, want := range []string{
+		"Team", "Linked Person", "@ukyo", "Linked", "Unlinked Person", "Needs review", "Kitsu role",
+		`<span class="production-team-status-inline"><span class="status-pill success" role="status">Linked</span><button type="submit" name="unlink_team_kitsu_id" value="person-linked" class="btn-ghost sm">Unlink</button></span>`,
+		`data-label="Status"><span class="status-pill warning" role="status">Needs review</span></td>`,
+	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Kitsu-driven Production Users view missing %q: %s", want, body)
 		}
