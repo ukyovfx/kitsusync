@@ -42,7 +42,7 @@ func TestPR199ConnectionsSavedTokenControlsAreMaskedAndReversible(t *testing.T) 
 		}
 	}
 
-	copy := "Used for links in Discord notifications."
+	copy := "Used for links and card images in Discord notifications."
 	if strings.Count(body, copy) != 1 {
 		t.Fatalf("External Kitsu URL explanation count=%d, want 1", strings.Count(body, copy))
 	}

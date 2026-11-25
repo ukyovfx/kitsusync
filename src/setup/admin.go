@@ -2182,9 +2182,9 @@ func renderConnectionsDisplayBodyWithBotIdentity(lang string, r *http.Request, d
 		`<div class="connections-summary-grid">` +
 		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><span class="status-pill ` + esc(kitsuStatus.Class) + `" role="status">` + esc(kitsuStatus.Label) + `</span></div>` +
 		`<label class="conn-field-label">` + esc(t(lang, "Kitsu Bot APIトークン", "Kitsu Bot API token")) + `</label>` + kitsuTokenBox +
-		`<label class="conn-field-label">` + esc(t(lang, "Kitsu のアドレス（通知リンク用）", "Kitsu address (for notification links)")) + `</label>` +
+		`<label class="conn-field-label">` + esc(t(lang, "チームが開く Kitsu のアドレス", "Kitsu address your team opens")) + `</label>` +
 		`<div class="hostrow"><span class="hostval">` + esc(linkURL) + `</span></div>` +
-		`<p class="conn-note">` + esc(t(lang, "Discord通知のリンクに使います。", "Used for links in Discord notifications.")) + `</p>` +
+		`<p class="conn-note">` + esc(t(lang, "Discord通知のリンクと、通知カードの画像に使います。", "Used for links and card images in Discord notifications.")) + `</p>` +
 		`<details class="connection-advanced-details"><summary><span>` + esc(t(lang, "詳細設定", "Advanced settings")) + `</span><span class="v">` + esc(t(lang, "接続先（API用）：", "API endpoint: ")) + esc(endpointModeLabel) + ` <span class="chev">▸</span></span></summary>` +
 		`<div style="margin-top:10px;"><label class="conn-field-label">` + esc(t(lang, "Kitsu接続先（API用）", "Kitsu endpoint (for API)")) + `</label><div class="hostrow"><span class="hostval">` + esc(host) + `</span></div>` + apiBaseRow + `</div></details></section>` +
 		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><span class="status-pill ` + esc(discordStatus.Class) + `" role="status">` + esc(discordStatus.Label) + `</span></div>` +
@@ -2269,12 +2269,12 @@ func renderConnectionsEditFormWithExternalURLState(lang string, r *http.Request,
 	if externalURLDraft == externalURLInitialValue {
 		externalURLSaveDisabled = " disabled"
 	}
-	externalURLField := `<div class="connection-form-field"><label class="conn-field-label" for="kitsu-external-url">` + esc(t(lang, "Kitsu のアドレス（通知リンク用）", "Kitsu address (for notification links)")) + `</label><div class="connection-external-url-controls"><input id="kitsu-external-url" type="url" name="kitsu_external_url" form="external-kitsu-url-form" value="` + esc(externalURLDraft) + `" data-initial-value="` + esc(externalURLInitialValue) + `" aria-describedby="external-kitsu-url-help` + func() string {
+	externalURLField := `<div class="connection-form-field"><label class="conn-field-label" for="kitsu-external-url">` + esc(t(lang, "チームが開く Kitsu のアドレス", "Kitsu address your team opens")) + `</label><div class="connection-external-url-controls"><input id="kitsu-external-url" type="url" name="kitsu_external_url" form="external-kitsu-url-form" value="` + esc(externalURLDraft) + `" data-initial-value="` + esc(externalURLInitialValue) + `" aria-describedby="external-kitsu-url-help` + func() string {
 		if externalURLSaveError != "" {
 			return ` external-kitsu-url-error`
 		}
 		return ""
-	}() + `">` + checkLink + `<button id="save-external-kitsu-url" type="submit" form="external-kitsu-url-form" class="btn sm"` + externalURLSaveDisabled + `>` + esc(t(lang, "保存", "Save")) + `</button></div><p id="external-kitsu-url-help" class="conn-note">` + esc(t(lang, "Discord通知のリンクに使います。", "Used for links in Discord notifications.")) + `</p>` + func() string {
+	}() + `">` + checkLink + `<button id="save-external-kitsu-url" type="submit" form="external-kitsu-url-form" class="btn sm"` + externalURLSaveDisabled + `>` + esc(t(lang, "保存", "Save")) + `</button></div><p id="external-kitsu-url-help" class="conn-note">` + esc(t(lang, "Discord通知のリンクと、通知カードの画像に使います。", "Used for links and card images in Discord notifications.")) + `</p>` + func() string {
 		if externalURLSaveError == "" {
 			return ""
 		}

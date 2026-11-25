@@ -195,7 +195,7 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	if !strings.Contains(body, `name="kitsu_hostname"`) {
 		t.Fatal("expected a named Kitsu hostname field")
 	}
-	for _, want := range []string{`name="kitsu_external_url"`, `id="external-kitsu-url-form"`, `name="action" value="save_external_kitsu_url"`, "Kitsu address (for notification links)", "Used for links in Discord notifications.", "Check link", "Save"} {
+	for _, want := range []string{`name="kitsu_external_url"`, `id="external-kitsu-url-form"`, `name="action" value="save_external_kitsu_url"`, "Kitsu address your team opens", "Used for links and card images in Discord notifications.", "Check link", "Save"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("external Kitsu URL field missing %q", want)
 		}
@@ -540,7 +540,7 @@ func TestConnectionsDisplayUsesSharedFieldRows(t *testing.T) {
 	if strings.Contains(body, "host.docker.internal") || strings.Contains(body, "&lt;span") || strings.Contains(body, "<span class=\"status-pill bad\">対応が必要</span>") {
 		t.Fatal("did not expect internal endpoint or literal status markup")
 	}
-	if !strings.Contains(body, "Kitsu Bot APIトークン") || !strings.Contains(body, "Kitsu のアドレス（通知リンク用）") || !strings.Contains(body, "Discord Botトークン") {
+	if !strings.Contains(body, "Kitsu Bot APIトークン") || !strings.Contains(body, "チームが開く Kitsu のアドレス") || !strings.Contains(body, "Discord Botトークン") {
 		t.Fatal("normal Connections view is missing the canonical safe field labels")
 	}
 }

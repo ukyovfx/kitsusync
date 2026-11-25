@@ -2315,7 +2315,7 @@ func recentSystemIssues(lang string, r *http.Request, db *gorm.DB) string {
 	if count == 0 {
 		return ""
 	}
-	return `<table class="data-table system-issues-table"><thead><tr><th scope="col">` + esc(t(lang, "時刻", "Time")) + `</th><th scope="col">` + esc(t(lang, "内容", "Content")) + `</th><th scope="col">` + esc(t(lang, "状態", "State")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table>`
+	return `<table class="data-table system-issues-table health-status-table"><thead><tr><th scope="col">` + esc(t(lang, "時刻", "Time")) + `</th><th scope="col">` + esc(t(lang, "内容", "Content")) + `</th><th scope="col">` + esc(t(lang, "状態", "State")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table>`
 }
 
 func normalizeStatusClass(class string) string {
