@@ -44,7 +44,7 @@ var (
 	sessions        = map[string]sessionData{}
 	revokedSessions = map[string]time.Time{}
 	sessionStoreDB  *gorm.DB
-	sessionTTL      = 15 * time.Minute
+	sessionTTL      = 8 * time.Hour
 	// sessionDigestKey is generated once for this process and deliberately
 	// never persisted. Consequently, AdminSession rows from an earlier
 	// process cannot validate opaque browser tokens after a restart.

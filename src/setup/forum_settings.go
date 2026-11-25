@@ -532,7 +532,11 @@ func renderForumResultPanel(lang string, current model.ProductionForumSettings, 
 		for _, role := range forumRoleOptions {
 			_, has := tagRoles[route.ForumChannelID+"|"+role]
 			has = has && routed
-			body.WriteString(`<td>` + pill(has, t(lang, "あり", "Yes"), t(lang, "なし", "No")) + `</td>`)
+			if has {
+				body.WriteString(`<td>` + pill(true, t(lang, "あり", "Yes"), "") + `</td>`)
+			} else {
+				body.WriteString(`<td></td>`)
+			}
 		}
 		body.WriteString(`</tr>`)
 	}
@@ -546,9 +550,12 @@ func renderForumResultPanel(lang string, current model.ProductionForumSettings, 
 	case justCreated:
 		headline = t(lang, "作成結果: 成功", "Result: created")
 	}
+	tableHTML := ""
+	if created > 0 {
+		tableHTML = `<div class="table-wrap"><table class="data-table"><thead><tr>` + head.String() + `</tr></thead><tbody>` + body.String() + `</tbody></table></div>`
+	}
 	return `<section class="section-card glass forum-result" id="forum-result"><h2>` + esc(t(lang, "作成結果と現在の状態", "Creation result and current state")) + `</h2>` +
-		`<p class="field-help" role="status">` + esc(headline+" — "+summary) + `</p>` + failureHTML +
-		`<div class="table-wrap"><table class="data-table"><thead><tr>` + head.String() + `</tr></thead><tbody>` + body.String() + `</tbody></table></div></section>`
+		`<p class="field-help" role="status">` + esc(headline+" — "+summary) + `</p>` + failureHTML + tableHTML + `</section>`
 }
 
 func forumTaskTypeRow(lang, id, name, selected string, forumOptions [][2]string) string {

@@ -150,6 +150,10 @@ func forumTagPatchList(existing []forumTagInfo, desired []forumAutoTag) []map[st
 // variable so tests can answer without Discord.
 var forumCreateChannel = createGuildForumChannel
 
+// forumCategoryCreator is the Bot API call that creates a category channel.
+// It is a variable so tests can answer without Discord.
+var forumCategoryCreator = CreateCategory
+
 func createGuildForumChannel(guildID, parentID, name string, tags []forumAutoTag, botToken string) (forumChannelInfo, error) {
 	payload := map[string]any{"name": name, "type": discordChannelTypeForum}
 	if len(tags) > 0 {
@@ -303,11 +307,10 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 	if strings.TrimSpace(botToken) == "" {
 		return settings, fmt.Errorf("%w: DiscordのBotトークンが設定されていません。Bot設定を保存してから実行してください。", errForumCreateAction)
 	}
+	project := model.FindProjectByKitsuID(db, productionID)
 	guildID := strings.TrimSpace(settings.Config.GuildID)
-	if guildID == "" {
-		if project := model.FindProjectByKitsuID(db, productionID); project != nil {
-			guildID = strings.TrimSpace(project.DiscordGuildID)
-		}
+	if guildID == "" && project != nil {
+		guildID = strings.TrimSpace(project.DiscordGuildID)
 	}
 	if guildID == "" {
 		guildID = strings.TrimSpace(fallbackGuildID)
@@ -318,8 +321,10 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 	settings.Config.GuildID = guildID
 	// Forums are created under the Production's own Discord category.
 	parentID := ""
-	if project := model.FindProjectByKitsuID(db, productionID); project != nil {
+	projectName := ""
+	if project != nil {
 		parentID = strings.TrimSpace(project.DiscordCategoryID)
+		projectName = project.Name
 	}
 
 	// The status → role mapping is decided from the Kitsu status names, so the
@@ -360,6 +365,24 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 				existing, err := forumChannelLister(guildID, botToken)
 				if err != nil {
 					return settings, fmt.Errorf("%w: Discordのフォーラム一覧を取得できませんでした: %w", errForumCreateAction, err)
+				}
+				categoryValid := false
+				if parentID != "" {
+					if body, ok := guildChannelListCache.cachedBody(guildID); ok {
+						if channels, err := decodeGuildChannelsBody(body); err == nil {
+							categoryValid = discordCategoryExists(channels, parentID)
+						}
+					}
+				}
+				if !categoryValid {
+					newCategoryID, err := forumCategoryCreator(guildID, KitsuSyncCategoryName(projectName), botToken)
+					if err != nil {
+						return settings, fmt.Errorf("%w: Discordカテゴリを作成できませんでした: %w", errForumCreateAction, err)
+					}
+					if err := model.UpdateProjectCategoryID(db, productionID, newCategoryID); err != nil {
+						return settings, fmt.Errorf("%w: DiscordカテゴリIDを保存できませんでした: %w", errForumCreateAction, err)
+					}
+					parentID = newCategoryID
 				}
 				existingForums = map[string]forumChannelInfo{}
 				for _, forum := range existing {

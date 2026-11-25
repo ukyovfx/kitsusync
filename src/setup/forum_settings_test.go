@@ -37,10 +37,16 @@ func newForumPageDB(t *testing.T) *gorm.DB {
 // guild channel cache, so both seams are replaced together.
 func stubForumLookups(t *testing.T, discordErr error) {
 	t.Helper()
-	oldTypes, oldStatuses, oldForums, oldCache := forumTaskTypeLister, forumStatusLister, forumChannelLister, guildChannelListCache
+	oldTypes, oldStatuses, oldForums, oldCache, oldCatCreator := forumTaskTypeLister, forumStatusLister, forumChannelLister, guildChannelListCache, forumCategoryCreator
 	t.Cleanup(func() {
-		forumTaskTypeLister, forumStatusLister, forumChannelLister, guildChannelListCache = oldTypes, oldStatuses, oldForums, oldCache
+		forumTaskTypeLister, forumStatusLister, forumChannelLister, guildChannelListCache, forumCategoryCreator = oldTypes, oldStatuses, oldForums, oldCache, oldCatCreator
 	})
+	forumCategoryCreator = func(string, string, string) (string, error) {
+		if discordErr != nil {
+			return "", discordErr
+		}
+		return "cat-auto", nil
+	}
 	forumTaskTypeLister = func(*gorm.DB, string) []kitsu.TaskType {
 		return []kitsu.TaskType{{ID: "tt-anim", Name: "Animation"}, {ID: "tt-comp", Name: "Compositing"}}
 	}
@@ -576,5 +582,64 @@ func TestForumSettingsEmptyTaskTypesHidesEmptyTable(t *testing.T) {
 	}
 	if !strings.Contains(body, "No task types were found for this Production") {
 		t.Fatal("forum page must render an empty-state message when there are no task-type rows")
+	}
+}
+
+func TestForumSettingsTagTableVisibility(t *testing.T) {
+	stubForumLookups(t, nil)
+	db := newForumPageDB(t)
+	model.SetSetting(db, forumAutoCreateCheckKey("p1"), "previous auto-create failed")
+
+	renderPanel := func() (string, string) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		forumHandler(db)(w, httptest.NewRequest(http.MethodGet, "/bot/admin/forum?project=p1&lang=ja", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d", w.Code)
+		}
+		body := w.Body.String()
+		start := strings.Index(body, `id="forum-result"`)
+		if start < 0 {
+			t.Fatalf("missing forum-result panel: %s", body)
+		}
+		rest := body[start:]
+		return body, rest[:strings.Index(rest, "</section>")]
+	}
+
+	// 1. No forums created yet -> summary and create button stay, tag table omitted.
+	full, panel := renderPanel()
+	if !strings.Contains(panel, "作成結果と現在の状態") || !strings.Contains(full, `value="create_forums"`) {
+		t.Fatalf("summary or create button missing when no forums exist")
+	}
+	if strings.Contains(panel, "<table") || strings.Contains(panel, "なし") {
+		t.Fatalf("tag table and なし pills must not render when no forums exist: %s", panel)
+	}
+
+	// 2. At least one forum exists -> table renders with あり for present tags,
+	// empty cells for missing tags, and 未作成 only in the フォーラム column.
+	if err := db.Create(&model.ProductionForumConfig{ProductionID: "p1", GuildID: "g1"}).Error; err != nil {
+		t.Fatalf("create config: %v", err)
+	}
+	if err := db.Create(&model.ProductionForumRoute{ProductionID: "p1", TaskTypeID: "tt-anim", TaskTypeName: "Animation", ForumChannelID: "f-anim", ForumChannelName: "animation"}).Error; err != nil {
+		t.Fatalf("create route: %v", err)
+	}
+	if err := db.Create(&model.ProductionForumTag{ProductionID: "p1", ForumChannelID: "f-anim", Role: model.ForumRoleWFA, TagID: "t1"}).Error; err != nil {
+		t.Fatalf("create tag: %v", err)
+	}
+	_, panel = renderPanel()
+	if !strings.Contains(panel, "<table") {
+		t.Fatalf("tag table must render when at least one forum exists: %s", panel)
+	}
+	if strings.Contains(panel, "なし") {
+		t.Fatalf("missing tags must render as empty cells without なし pill: %s", panel)
+	}
+	if strings.Count(panel, `status-pill success">あり`) != 1 {
+		t.Fatalf("expected 1 あり pill, got panel: %s", panel)
+	}
+	if strings.Count(panel, `status-pill warning">未作成`) != 1 {
+		t.Fatalf("expected 1 未作成 marker in forum column, got panel: %s", panel)
+	}
+	if strings.Count(panel, `<td></td>`) != 7 {
+		t.Fatalf("expected 7 empty tag cells (3 on Animation + 4 on Compositing), got panel: %s", panel)
 	}
 }

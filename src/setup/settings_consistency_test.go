@@ -364,10 +364,13 @@ func TestForumResultPanelShowsCreatedStateAndFailures(t *testing.T) {
 	failed := w.Body.String()
 	panel = failed[strings.Index(failed, `id="forum-result"`):]
 	panel = panel[:strings.Index(panel, "</section>")]
-	for _, want := range []string{"Result: failed", "What failed", "missing permission", "Not created", "Task Types with a forum: 0, not created: 2"} {
+	for _, want := range []string{"Result: failed", "What failed", "missing permission", "Task Types with a forum: 0, not created: 2"} {
 		if !strings.Contains(panel, want) {
 			t.Fatalf("failure panel missing %q: %s", want, panel)
 		}
+	}
+	if strings.Contains(panel, "<table") {
+		t.Fatalf("tag table must not render when no forums exist yet: %s", panel)
 	}
 }
 
@@ -386,7 +389,7 @@ func TestForumResultPanelAfterPartialCreateFailure(t *testing.T) {
 			t.Fatalf("partial-failure panel missing %q: %s", want, panel)
 		}
 	}
-	if strings.Count(panel, `status-pill success">Yes`) != 2 || strings.Count(panel, `status-pill warning">No<`) != 6 {
+	if strings.Count(panel, `status-pill success">Yes`) != 2 || strings.Count(panel, `status-pill warning">No<`) != 0 || strings.Count(panel, `<td></td>`) != 6 {
 		t.Fatalf("tag states are wrong for a forum with two of four tags: %s", panel)
 	}
 }
