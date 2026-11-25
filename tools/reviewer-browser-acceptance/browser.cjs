@@ -28,8 +28,8 @@ const locales = [
     forumHeadings: ['タスクタイプ → フォーラム'],
   },
 ];
-const compositingAutomatic = ['@Guild Nick Supervisor', '@Global Name Fallback', '@username-fallback'];
-const animationAutomatic = ['@Wrong Department Global'];
+const compositingAutomatic = ['@Guild Nick Supervisor', '@position-only', '@Global Name Fallback', '@username-fallback'];
+const animationAutomatic = compositingAutomatic;
 const viewports = [
   { name: 'desktop', width: 1440, height: 1000 },
   { name: 'mobile', width: 390, height: 844 },
@@ -708,7 +708,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const notificationColumnWidths = await page.locator('.production-notification-table thead th').evaluateAll(nodes => nodes.map(node => Math.round(node.getBoundingClientRect().width)));
         if (notificationColumnWidths.length !== 3 || notificationColumnWidths.some(width => parseFloat(width) <= 0)) throw new Error(`Notifications lost stable three-column geometry in ${locale.lang}: ${JSON.stringify(notificationColumnWidths)}`);
         const effectiveChipRow = compReadRow.locator('[data-wfa-recipients] .production-wfa-chip-row');
-        if (await effectiveChipRow.locator('.production-wfa-target-chip').count() !== 2 || await effectiveChipRow.locator('.production-wfa-more-chip').innerText() !== '+4') throw new Error(`effective WFA recipients are not compactly truncated in ${locale.lang}`);
+        if (await effectiveChipRow.locator('.production-wfa-target-chip').count() !== 2 || await effectiveChipRow.locator('.production-wfa-more-chip').innerText() !== '+5') throw new Error(`effective WFA recipients are not compactly truncated in ${locale.lang}`);
         const summaryAlignment = await compReadRow.locator('[data-wfa-recipients]').evaluate(node => {
           const rect = node.getBoundingClientRect(), table = node.closest('table').getBoundingClientRect();
           return { left: rect.left, right: rect.right, tableLeft: table.left, tableRight: table.right, whiteSpace: getComputedStyle(node).whiteSpace };
@@ -1187,13 +1187,13 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (await page.locator('form input[name="action"][value*="production_member"],form input[name="action"][value*="production_role"]').count()) throw new Error('Team exposed membership or role mutation');
         if ((await teamTab.innerText()).includes('Example task') || (await teamTab.innerText()).includes('Assigned')) throw new Error('Team inferred task assignments from Department membership');
         const teamText = await teamTab.innerText();
-        for (const expected of locale.lang === 'ja' ? ['チーム', 'Supervisor範囲', '要確認'] : ['Team', 'Supervision scope', 'Needs review']) {
+        for (const expected of locale.lang === 'ja' ? ['チーム', '役職', '要確認'] : ['Team', 'Position', 'Needs review']) {
           if (!teamText.includes(expected)) throw new Error(`Team view is missing ${expected} in ${locale.lang}`);
         }
         const teamHeaders = (await page.locator('.production-team-table thead th').allTextContents()).map(text => text.trim());
         const expectedTeamHeaders = locale.lang === 'ja'
-          ? ['メンバー', 'Kitsuロール', 'Department', 'Discord', '状態']
-          : ['Member', 'Kitsu role', 'Department', 'Discord', 'Status'];
+          ? ['メンバー', 'Kitsuロール', '役職', 'Discord', '状態']
+          : ['Member', 'Kitsu role', 'Position', 'Discord', 'Status'];
         if (JSON.stringify(teamHeaders) !== JSON.stringify(expectedTeamHeaders)) {
           throw new Error(`Team table does not match the five-column structure (no per-member action column) in ${locale.lang}: ${JSON.stringify(teamHeaders)}`);
         }
@@ -1410,7 +1410,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     if (await page.locator('#tab-reviewers').count() || await page.locator('.production-tabs [role="tab"]').filter({ hasText: /^Reviewers$/ }).count()) throw new Error('Reviewers remains a primary Production tab');
     await assertAutomatic(page, locales[0], compositingAutomatic, [
       '@Departmentless Global', '@Wrong Department Global', '@Manager Global', '@Admin Global',
-      '@Demoted Global', '@Project Manager Global', '@position-only', '@inactive', '@kitsu-bot',
+      '@Demoted Global', '@Project Manager Global', '@inactive', '@kitsu-bot',
     ]);
     const productionIdentity = await page.locator('.production-identity').innerText();
     if (!productionIdentity.includes('Synthetic Review Production')) throw new Error('Production identity header is missing the selected Production name');

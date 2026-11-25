@@ -271,6 +271,19 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	if strings.Contains(body, `class="connection-state-row"`) || strings.Contains(body, `>Token<`) || strings.Contains(body, `>Connection<`) {
 		t.Fatal("edit form should not duplicate token and connection state rows")
 	}
+	if got := strings.Count(body, ">Save connection</button>"); got != 2 {
+		t.Fatalf("expected 2 English connection save buttons, got %d", got)
+	}
+	if strings.Contains(body, "Save Kitsu connection") || strings.Contains(body, "Save Discord Bot connection") {
+		t.Fatal("connection save buttons must not include service prefix in English")
+	}
+	jaBody := renderConnectionsEditFormWithHealth("ja", httptest.NewRequest("GET", "/bot/admin/bot?edit=1&lang=ja", nil), db, "", "bad", "要対応", "http://host.docker.internal:8080", false, false, "")
+	if got := strings.Count(jaBody, ">接続を保存</button>"); got != 2 {
+		t.Fatalf("expected 2 Japanese connection save buttons, got %d", got)
+	}
+	if strings.Contains(jaBody, "Kitsu接続を保存") || strings.Contains(jaBody, "Discord Bot接続を保存") {
+		t.Fatal("connection save buttons must not include service prefix in Japanese")
+	}
 }
 
 func TestConnectionsSaveExternalKitsuURLIndependentlyAndReloads(t *testing.T) {
@@ -429,8 +442,18 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 	if strings.Contains(body, "data-token-change") || strings.Contains(body, "Change token") || strings.Contains(body, `id="kitsu-bot-token" type="password" name="kitsu_bot_token" autocomplete="new-password" aria-describedby="kitsu-token-help" data-token-input="kitsu" disabled`) {
 		t.Fatal("token inputs must be directly editable without unlock buttons")
 	}
-	if strings.Count(body, `>Cancel<`) != 1 {
-		t.Fatalf("expected exactly one page-level Cancel link, got %d", strings.Count(body, `>Cancel<`))
+	if strings.Contains(body, `>Cancel<`) || strings.Contains(body, `>キャンセル<`) {
+		t.Fatal("connections edit mode must not render a page-level Cancel link")
+	}
+	if !strings.Contains(body, `<div class="button-row connections-navigation connections-footer"><a class="btn-ghost" href="/bot/admin/bot?lang=en">Back to Connections</a></div>`) {
+		t.Fatalf("connections edit footer must link back to settings view: %s", body)
+	}
+	jaBody := renderConnectionsEditFormWithIdentityRows("ja", httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang=ja", nil), db, "", "warn", "要確認", "https://kitsu.example.test", false, false, "Test Bot")
+	if strings.Contains(jaBody, `>Cancel<`) || strings.Contains(jaBody, `>キャンセル<`) {
+		t.Fatal("connections edit mode (ja) must not render a page-level Cancel link")
+	}
+	if !strings.Contains(jaBody, `<div class="button-row connections-navigation connections-footer"><a class="btn-ghost" href="/bot/admin/bot?lang=ja">接続設定へ戻る</a></div>`) {
+		t.Fatalf("connections edit footer (ja) must link back to settings view: %s", jaBody)
 	}
 	if strings.Count(body, `class="connection-advanced-details" id="connections-advanced"`) != 1 {
 		t.Fatal("advanced connection settings must use one restrained disclosure inside the Kitsu card")

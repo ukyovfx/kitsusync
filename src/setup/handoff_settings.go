@@ -481,7 +481,7 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 		errorHTML = `<div class="notice notice-error" role="alert"><strong>` + esc(t(lang, "保存できませんでした", "Could not save")) + `</strong><p>` + esc(saveErr.Error()) + `</p></div>`
 	}
 
-	editing := saveErr != nil
+	editing := saveErr != nil || r.FormValue("edit") == "1"
 	normalHidden := ""
 	editHidden := " hidden"
 	formClass := "section-stack"
@@ -573,12 +573,18 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 	if noAssigneeValue == "" {
 		noAssigneeValue = model.HandoffFallbackDisabled
 	}
+	noAssigneeSelect := forumSelect("no_assignee", noAssigneeValue, fallbackOptionsList, "")
+	if !editing {
+		noAssigneeSelect = strings.Replace(noAssigneeSelect, "<select ", "<select hidden ", 1)
+	}
+	noAssigneeSummary := `<span class="handoff-noassignee-summary" data-handoff-noassignee-summary` + normalHidden + `>` + esc(handoffFallbackLabel(lang, noAssigneeValue)) + `</span>`
 	fallbackField := ""
 	if noAssigneeValue == model.HandoffFallbackUsers {
-		fallbackUserOptions := handoffFallbackMemberOptions(db, project.DiscordGuildID, config.FallbackUserID, lang)
+		fallbackUserOptions, fallbackMemberLabel := handoffFallbackMemberOptions(db, project.DiscordGuildID, config.FallbackUserID, lang)
 		fallbackField = `<div id="handoff-fallback-user-field">` +
 			`<label class="conn-field-label" for="handoff-fallback-user">` + esc(t(lang, "通知するメンバー", "Member to notify")) + `</label>` +
-			`<select id="handoff-fallback-user" name="fallback_user">` + fallbackUserOptions + `</select>` +
+			`<span class="handoff-noassignee-summary" data-handoff-member-summary` + normalHidden + `>` + esc(fallbackMemberLabel) + `</span>` +
+			`<select id="handoff-fallback-user" name="fallback_user"` + editHidden + `>` + fallbackUserOptions + `</select>` +
 			`</div>`
 	}
 	form := `<form method="post" action="` + esc(withLang("/bot/admin/handoff", r)) + `" class="` + formClass + `" data-handoff-override-root data-empty-label="` + esc(t(lang, "行き先を追加してください", "Add a destination")) + `">` +
@@ -588,8 +594,9 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 		`<div class="handoff-routes">` + overrideRows.String() + `</div></section>` +
 		`<section class="flat-section"><h2>` + esc(t(lang, "担当者なしの扱い", "When nobody is assigned")) + `</h2>` +
 		`<label class="conn-field-label" for="handoff-noassignee">` + esc(t(lang, "担当者なしの通知先", "Recipient when nobody is assigned")) + `</label>` +
-		forumSelect("no_assignee", noAssigneeValue, fallbackOptionsList, "") +
-		`<p class="conn-note">` + esc(t(lang, "「指定したユーザーに通知」を選んで保存すると、通知先のメンバー選択欄が表示されます。", "Save \"Notify a chosen user\" to show the member selector.")) + `</p>` +
+		noAssigneeSummary +
+		noAssigneeSelect +
+		`<p class="conn-note" data-handoff-noassignee-note` + editHidden + `>` + esc(t(lang, "「指定したユーザーに通知」を選んで保存すると、通知先のメンバー選択欄が表示されます。", "Save \"Notify a chosen user\" to show the member selector.")) + `</p>` +
 		fallbackField +
 		`</section>` +
 		`<div class="button-row">` +
@@ -609,12 +616,14 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 // and presentation toggles: in normal mode rows stay read-only without ×
 // chips; in edit mode each row exposes its target chips, reset button (when
 // overridden), and right-pinned destination adder.
-const handoffPageScript = `<script data-handoff-page>(function(){var root=document.querySelector("[data-handoff-override-root]");var emptyLabel=(root&&root.getAttribute("data-empty-label"))||"行き先を追加してください";var editing=!!(root&&root.classList.contains("is-editing"));var editStart=root&&root.querySelector("[data-route-edit-start]");var editCancel=root&&root.querySelector("[data-route-edit-cancel]");var editActions=root&&root.querySelector("[data-route-edit-actions]");var backLink=root&&root.querySelector("[data-route-back]");var rows=[];document.querySelectorAll("[data-ov-row]").forEach(function(row){var id=row.getAttribute("data-ov-row");var select=row.querySelector("select[name=\"ov_mode_"+id+"\"]");var editor=row.querySelector("[data-ov-editor=\""+id+"\"]");var chips=row.querySelector("[data-ov-chips]");var resetBtn=row.querySelector("[data-ov-reset]");if(!select||!editor)return;var boxes=editor.querySelectorAll("input[type=checkbox][name^=\"ov_notify_\"]");var addSelect=editor.querySelector("[data-ov-add-select]");var addBtn=editor.querySelector("[data-ov-add]");function rebuildChips(){if(!chips)return;var checked=[];boxes.forEach(function(b){if(b.checked)checked.push(b)});chips.innerHTML="";if(checked.length===0){var empty=document.createElement("span");empty.className="route-none-label";empty.textContent=emptyLabel;chips.appendChild(empty)}else{checked.forEach(function(b){var chip=document.createElement("span");chip.className=editing?"route-chip":"route-chip route-chip-static";chip.textContent=b.getAttribute("data-route-name")||b.value;if(editing){var rm=document.createElement("button");rm.type="button";rm.textContent="×";rm.setAttribute("aria-label",chip.textContent);rm.addEventListener("click",function(){b.checked=false;rebuildChips()});chip.appendChild(rm)}chips.appendChild(chip)})}if(addSelect){var cur=addSelect.value;var first=addSelect.querySelector("option[value=\"\"]");addSelect.innerHTML="";if(first)addSelect.appendChild(first);boxes.forEach(function(b){if(b.checked)return;var opt=document.createElement("option");opt.value=b.value;opt.textContent=b.getAttribute("data-route-name")||b.value;addSelect.appendChild(opt)});addSelect.value=cur}}function apply(){var mode=select.value;select.hidden=true;row.querySelectorAll("[data-handoff-summary]").forEach(function(span){span.hidden=span.getAttribute("data-handoff-summary")!==mode});editor.hidden=!editing;if(resetBtn)resetBtn.hidden=!editing||mode==="inherit";if(mode!=="custom"){boxes.forEach(function(b){b.checked=false})}rebuildChips()}if(resetBtn){resetBtn.addEventListener("click",function(){select.value="inherit";boxes.forEach(function(b){b.checked=false});apply()})}if(addBtn&&addSelect){addBtn.addEventListener("click",function(){var val=addSelect.value;if(!val)return;select.value="custom";boxes.forEach(function(b){if(b.value===val)b.checked=true});apply()})}rows.push(apply)});var fallback=document.querySelector("select[name=\"no_assignee\"]"),field=document.getElementById("handoff-fallback-user-field");var applyFallback=function(){if(fallback&&field)field.hidden=fallback.value!=="users"};if(fallback&&field){fallback.addEventListener("change",applyFallback)}function setEditing(next){editing=!!next;if(root)root.classList.toggle("is-editing",editing);if(editStart)editStart.hidden=editing;if(backLink)backLink.hidden=editing;if(editActions)editActions.hidden=!editing;rows.forEach(function(apply){apply()});applyFallback()}if(editStart){editStart.addEventListener("click",function(){setEditing(true)})}if(editCancel){editCancel.addEventListener("click",function(){if(root)root.reset();setEditing(false)})}setEditing(editing)})();</script>`
+const handoffPageScript = `<script data-handoff-page>(function(){var root=document.querySelector("[data-handoff-override-root]");var emptyLabel=(root&&root.getAttribute("data-empty-label"))||"行き先を追加してください";var editing=!!(root&&root.classList.contains("is-editing"));var editStart=root&&root.querySelector("[data-route-edit-start]");var editCancel=root&&root.querySelector("[data-route-edit-cancel]");var editActions=root&&root.querySelector("[data-route-edit-actions]");var backLink=root&&root.querySelector("[data-route-back]");var rows=[];document.querySelectorAll("[data-ov-row]").forEach(function(row){var id=row.getAttribute("data-ov-row");var select=row.querySelector("select[name=\"ov_mode_"+id+"\"]");var editor=row.querySelector("[data-ov-editor=\""+id+"\"]");var chips=row.querySelector("[data-ov-chips]");var resetBtn=row.querySelector("[data-ov-reset]");if(!select||!editor)return;var boxes=editor.querySelectorAll("input[type=checkbox][name^=\"ov_notify_\"]");var addSelect=editor.querySelector("[data-ov-add-select]");var addBtn=editor.querySelector("[data-ov-add]");function rebuildChips(){if(!chips)return;var checked=[];boxes.forEach(function(b){if(b.checked)checked.push(b)});chips.innerHTML="";if(checked.length===0){var empty=document.createElement("span");empty.className="route-none-label";empty.textContent=emptyLabel;chips.appendChild(empty)}else{checked.forEach(function(b){var chip=document.createElement("span");chip.className=editing?"route-chip":"route-chip route-chip-static";chip.textContent=b.getAttribute("data-route-name")||b.value;if(editing){var rm=document.createElement("button");rm.type="button";rm.textContent="×";rm.setAttribute("aria-label",chip.textContent);rm.addEventListener("click",function(){b.checked=false;rebuildChips()});chip.appendChild(rm)}chips.appendChild(chip)})}if(addSelect){var cur=addSelect.value;var first=addSelect.querySelector("option[value=\"\"]");addSelect.innerHTML="";if(first)addSelect.appendChild(first);boxes.forEach(function(b){if(b.checked)return;var opt=document.createElement("option");opt.value=b.value;opt.textContent=b.getAttribute("data-route-name")||b.value;addSelect.appendChild(opt)});addSelect.value=cur}}function apply(){var mode=select.value;select.hidden=true;row.querySelectorAll("[data-handoff-summary]").forEach(function(span){span.hidden=span.getAttribute("data-handoff-summary")!==mode});editor.hidden=!editing;if(resetBtn)resetBtn.hidden=!editing||mode==="inherit";if(mode!=="custom"){boxes.forEach(function(b){b.checked=false})}rebuildChips()}if(resetBtn){resetBtn.addEventListener("click",function(){select.value="inherit";boxes.forEach(function(b){b.checked=false});apply()})}if(addBtn&&addSelect){addBtn.addEventListener("click",function(){var val=addSelect.value;if(!val)return;select.value="custom";boxes.forEach(function(b){if(b.value===val)b.checked=true});apply()})}rows.push(apply)});var fallback=document.querySelector("select[name=\"no_assignee\"]"),noAssigneeSummary=document.querySelector("[data-handoff-noassignee-summary]"),noAssigneeNote=document.querySelector("[data-handoff-noassignee-note]"),field=document.getElementById("handoff-fallback-user-field"),fallbackSelect=document.getElementById("handoff-fallback-user"),fallbackSummary=document.querySelector("[data-handoff-member-summary]");var applyFallback=function(){if(fallback)fallback.hidden=!editing;if(noAssigneeSummary)noAssigneeSummary.hidden=editing;if(noAssigneeNote)noAssigneeNote.hidden=!editing;if(fallbackSelect)fallbackSelect.hidden=!editing;if(fallbackSummary)fallbackSummary.hidden=editing;if(fallback&&field)field.hidden=fallback.value!=="users"};if(fallback&&field){fallback.addEventListener("change",applyFallback)}function setEditing(next){editing=!!next;if(root)root.classList.toggle("is-editing",editing);if(editStart)editStart.hidden=editing;if(backLink)backLink.hidden=editing;if(editActions)editActions.hidden=!editing;rows.forEach(function(apply){apply()});applyFallback()}if(editStart){editStart.addEventListener("click",function(){setEditing(true)})}if(editCancel){editCancel.addEventListener("click",function(){if(root)root.reset();setEditing(false)})}setEditing(editing)})();</script>`
 
-func handoffFallbackMemberOptions(db *gorm.DB, guildID, current, lang string) string {
+func handoffFallbackMemberOptions(db *gorm.DB, guildID, current, lang string) (string, string) {
 	current = strings.TrimSpace(current)
 	var b strings.Builder
-	b.WriteString(`<option value="">` + esc(t(lang, "（選択）", "(choose)")) + `</option>`)
+	emptyLabel := t(lang, "（選択）", "(choose)")
+	selectedLabel := emptyLabel
+	b.WriteString(`<option value="">` + esc(emptyLabel) + `</option>`)
 	var members []DiscordGuildMember
 	if botToken := storedRuntimeDiscordBotToken(db); botToken != "" && isDiscordSnowflake(guildID) {
 		loaded, status, err := cachedGuildMembers(guildID, botToken)
@@ -631,17 +640,20 @@ func handoffFallbackMemberOptions(db *gorm.DB, guildID, current, lang string) st
 		if !isDiscordSnowflake(id) {
 			continue
 		}
+		displayName := discordGuildMemberDisplayName(member)
 		selected := ""
 		if id == current {
 			selected = " selected"
 			foundCurrent = true
+			selectedLabel = displayName
 		}
-		b.WriteString(`<option value="` + esc(id) + `"` + selected + `>` + esc(discordGuildMemberDisplayName(member)) + `</option>`)
+		b.WriteString(`<option value="` + esc(id) + `"` + selected + `>` + esc(displayName) + `</option>`)
 	}
 	if current != "" && !foundCurrent {
+		selectedLabel = current
 		b.WriteString(`<option value="` + esc(current) + `" selected>` + esc(current) + `</option>`)
 	}
-	return b.String()
+	return b.String(), selectedLabel
 }
 
 // renderHandoffSettingsLink is the production page's entry to the wiring

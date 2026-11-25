@@ -60,35 +60,29 @@ func TestProductionTeamCompactRows(t *testing.T) {
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
 	}
-	longDepartment := "Long Department Name for Composite Visual Effects"
-	longScope := longDepartment + ": Comp, Paint, Roto"
-	oldTeam, oldTaskTypes := reviewerProductionTeamReader, reviewerTaskTypesForProduction
+	oldTeam := reviewerProductionTeamReader
 	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
 		return []kitsu.Person{
-			{ID: "supervisor-one", FullName: "Supervisor One", Role: "supervisor", Active: true, Departments: []string{"department-long"}},
-			{ID: "supervisor-two", FullName: "Supervisor Two", Role: "supervisor", Active: true, Departments: []string{"department-long"}},
+			{ID: "supervisor-one", FullName: "Supervisor One", Role: "supervisor", Position: "Comp Supervisor", Active: true},
+			{ID: "supervisor-two", FullName: "Supervisor Two", Role: "supervisor", Active: true},
 		}, nil
 	}
-	reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType {
-		return []kitsu.TaskType{
-			{ID: "task-comp", Name: "Comp", DepartmentID: "department-long", DepartmentName: longDepartment},
-			{ID: "task-roto", Name: "Roto", DepartmentID: "department-long", DepartmentName: longDepartment},
-			{ID: "task-paint", Name: "Paint", DepartmentID: "department-long", DepartmentName: longDepartment},
-		}
-	}
-	t.Cleanup(func() { reviewerProductionTeamReader, reviewerTaskTypesForProduction = oldTeam, oldTaskTypes })
+	t.Cleanup(func() { reviewerProductionTeamReader = oldTeam })
 
 	request := httptest.NewRequest("GET", "/bot/admin/projects?project=compact-team-production&tab=team&lang=en", nil)
 	body := renderCurrentProductionTeam(db, request, project, "en")
-	if strings.Count(body, `class="production-team-row"`) != 2 || !strings.Contains(body, longDepartment) || !strings.Contains(body, longScope) {
-		t.Fatalf("Team did not render comparative member rows with Department and derived Supervisor scope: %s", body)
+	if strings.Count(body, `class="production-team-row"`) != 2 || !strings.Contains(body, "Comp Supervisor") || !strings.Contains(body, `data-label="Position">—</td>`) {
+		t.Fatalf("Team did not render comparative member rows with Position and empty-position dash: %s", body)
 	}
-	for _, marker := range []string{`class="production-team-table"`, `<th scope="col">Member</th>`, `<th scope="col">Kitsu role</th>`, `<th scope="col">Department</th>`, `<th scope="col">Discord</th>`, `<th scope="col">Status</th>`} {
+	if strings.Contains(body, `class="production-team-supervisor-scope"`) {
+		t.Fatalf("Team still renders department-based supervisor scope markup: %s", body)
+	}
+	for _, marker := range []string{`class="production-team-table"`, `<th scope="col">Member</th>`, `<th scope="col">Kitsu role</th>`, `<th scope="col">Position</th>`, `<th scope="col">Discord</th>`, `<th scope="col">Status</th>`} {
 		if !strings.Contains(body, marker) {
 			t.Errorf("Team is missing the Gemini-derived table/navigation structure %q: %s", marker, body)
 		}
 	}
-	if !strings.Contains(body, `<colgroup><col class="production-team-col-member"><col class="production-team-col-role"><col class="production-team-col-department"><col class="production-team-col-discord"><col class="production-team-col-status">`) {
+	if !strings.Contains(body, `<colgroup><col class="production-team-col-member"><col class="production-team-col-role"><col class="production-team-col-position"><col class="production-team-col-discord"><col class="production-team-col-status">`) {
 		t.Fatal("Team table is missing its stable five-column width contract")
 	}
 	if strings.Contains(body, `<th scope="col">Action</th>`) || strings.Contains(body, "production-team-actions") {

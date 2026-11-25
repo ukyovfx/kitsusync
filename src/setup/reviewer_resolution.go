@@ -112,7 +112,7 @@ func resolveWFAReviewerTargets(db *gorm.DB, kitsuBaseURL, kitsuToken, discordTok
 	}
 	for _, person := range resolution.Supervisors {
 		teamPerson, isMember := reviewerTeamPerson(resolution.Team, person.ID)
-		if isMember && teamPerson.Active && !teamPerson.Archived && !teamPerson.IsBot && kitsu.EffectiveProductionRole(teamPerson) == "supervisor" && containsReviewerDepartment(person.Departments, resolution.TaskType.DepartmentID) {
+		if isMember && teamPerson.Active && !teamPerson.Archived && !teamPerson.IsBot && kitsu.IsSupervisorPosition(teamPerson) {
 			if discordID := linkedTeam[strings.TrimSpace(person.ID)]; discordID != "" {
 				add(model.ReviewerTargetUser, discordID)
 			}
@@ -159,17 +159,4 @@ func reviewerTeamPerson(team []kitsu.Person, personID string) (kitsu.Person, boo
 		}
 	}
 	return kitsu.Person{}, false
-}
-
-func containsReviewerDepartment(departments []string, departmentID string) bool {
-	departmentID = strings.TrimSpace(departmentID)
-	if departmentID == "" {
-		return false
-	}
-	for _, id := range departments {
-		if strings.TrimSpace(id) == departmentID {
-			return true
-		}
-	}
-	return false
 }
