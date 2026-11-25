@@ -430,7 +430,7 @@ func TestHandoffFallbackDefaultsToDisabledAndRendersMemberDropdown(t *testing.T)
 	w := httptest.NewRecorder()
 	HandoffSettingsHandler(db)(w, r)
 	body := w.Body.String()
-	if !strings.Contains(body, `data-handoff-fallback-summary>99999999999999999</span>`) {
+	if !strings.Contains(body, `data-handoff-member-summary>99999999999999999</span>`) {
 		t.Fatalf("expected static fallback member summary in view mode: %s", body)
 	}
 	if !strings.Contains(body, `<select id="handoff-fallback-user" name="fallback_user" hidden>`) {
