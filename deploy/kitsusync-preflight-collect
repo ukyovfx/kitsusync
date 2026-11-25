@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import pwd
 import re
 import sqlite3
 import stat
@@ -27,6 +28,50 @@ class EvidenceError(Exception):
     pass
 
 
+def load_install_layout(path: Path, expected_uid: int = 0) -> Path:
+    try:
+        meta = path.lstat()
+    except OSError as exc:
+        raise EvidenceError("install-layout is missing or unreadable") from exc
+    if (not stat.S_ISREG(meta.st_mode) or meta.st_uid != expected_uid or meta.st_gid != expected_uid
+            or (os.name != "nt" and stat.S_IMODE(meta.st_mode) != 0o600)):
+        raise EvidenceError("install-layout ownership or mode is unsafe")
+    try:
+        raw = _read_limited(path, expected_uid, 4096).decode("ascii")
+    except (OSError, UnicodeError, EvidenceError) as exc:
+        raise EvidenceError("install-layout is unreadable or malformed") from exc
+    lines = raw.splitlines()
+    if len(lines) != 2:
+        raise EvidenceError("install-layout must contain exactly RUNTIME_USER and RUNTIME_DIR")
+    values: dict[str, str] = {}
+    for line in lines:
+        key, sep, value = line.partition("=")
+        if sep != "=" or key not in {"RUNTIME_USER", "RUNTIME_DIR"} or key in values:
+            raise EvidenceError("install-layout is malformed")
+        values[key] = value
+    if set(values) != {"RUNTIME_USER", "RUNTIME_DIR"}:
+        raise EvidenceError("install-layout must contain exactly RUNTIME_USER and RUNTIME_DIR")
+    runtime_user = values["RUNTIME_USER"]
+    runtime_dir = values["RUNTIME_DIR"]
+    if not re.fullmatch(r"[a-z_][a-z0-9_-]*", runtime_user):
+        raise EvidenceError("install-layout RUNTIME_USER is invalid")
+    try:
+        pwd.getpwnam(runtime_user)
+    except KeyError as exc:
+        raise EvidenceError("install-layout RUNTIME_USER account does not exist") from exc
+    if (not re.fullmatch(r"(/[A-Za-z0-9._+-]+)+", runtime_dir)
+            or ".." in runtime_dir or runtime_dir.endswith("/.") or "/./" in runtime_dir):
+        raise EvidenceError("install-layout RUNTIME_DIR is invalid")
+    runtime_path = Path(runtime_dir)
+    try:
+        parent_meta = runtime_path.parent.lstat()
+    except OSError as exc:
+        raise EvidenceError("install-layout runtime parent directory is unavailable") from exc
+    if not stat.S_ISDIR(parent_meta.st_mode):
+        raise EvidenceError("install-layout runtime parent directory is unsafe")
+    return runtime_path
+
+
 class Paths:
     """Fixed production locations; for_fixture exists only for unit tests."""
 
@@ -41,10 +86,12 @@ class Paths:
 
     @classmethod
     def production(cls):
-        return cls(Path("/home/ukyo_vfx/kitsusync/data"),
+        control_root = Path("/etc/kitsusync-deploy")
+        runtime_dir = load_install_layout(control_root / "install-layout", expected_uid=0)
+        return cls(runtime_dir / "data",
                    Path("/var/backups/kitsusync-deploy"),
                    Path("/var/lib/kitsusync-deploy"),
-                   Path("/etc/kitsusync-deploy"),
+                   control_root,
                    Path("/root/kitsusync-release-stage"),
                    Path("/var/lib/docker"))
 
@@ -829,6 +876,11 @@ def main() -> int:
         evidence = collect(Paths.production())
         sys.stdout.write(json.dumps(evidence, separators=(",", ":"), sort_keys=True) + "\n")
         return 0
+    except EvidenceError as exc:
+        sys.stderr.write(f"ERROR: {exc}\n")
+        # Failure output is deliberately content-free.
+        sys.stdout.write('{"schema_version":1}\n')
+        return 2
     except Exception:
         # Failure output is deliberately content-free.
         sys.stdout.write('{"schema_version":1}\n')

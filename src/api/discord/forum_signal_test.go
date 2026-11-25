@@ -3,6 +3,7 @@ package discord
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRenderForumSignalCommentCard(t *testing.T) {
@@ -25,11 +26,8 @@ func TestRenderForumSignalCommentCard(t *testing.T) {
 		t.Fatalf("embeds = %d, want 1", len(signal.Embeds))
 	}
 	embed := signal.Embeds[0]
-	if embed.Title != "" {
-		t.Errorf("title = %q, want the heading inside the description", embed.Title)
-	}
-	if !strings.Contains(embed.Description, "## Shot / sq01 - sh002") {
-		t.Errorf("description %q missing the shot heading", embed.Description)
+	if embed.Title != "Shot / sq01 - sh002" {
+		t.Errorf("title = %q", embed.Title)
 	}
 	if embed.Author.Name != "Layout" {
 		t.Errorf("author = %q", embed.Author.Name)
@@ -56,12 +54,12 @@ func TestRenderForumSignalRetakeCard(t *testing.T) {
 		Quote:      ".Environment_Hall_Door",
 		TaskURL:    "https://kitsu.example/t/1",
 		StatusName: "retake",
-		Assignees:  []string{"山田", "松尾"},
+		Assignees:  []string{"山田", "佐藤"},
 		UserIDs:    []string{"222222222222222222"},
 	})
 	embed := signal.Embeds[0]
-	if !strings.Contains(embed.Description, "### 🔄 RETAKE\n修正をお願いします") {
-		t.Errorf("description %q missing the retake status block", embed.Description)
+	if !strings.Contains(embed.Description, "🔄 RETAKE 修正をお願いします") {
+		t.Errorf("description %q missing the retake status line", embed.Description)
 	}
 	if !strings.Contains(embed.Description, "> .Environment_Hall_Door") {
 		t.Errorf("description %q missing the retake quote", embed.Description)
@@ -116,8 +114,23 @@ func TestRenderForumSignalCardFallsBackToLegacyTitle(t *testing.T) {
 		Intent:      "comment",
 		LegacyTitle: "Layout Shot / sq01 - sh002",
 	})
-	if !strings.Contains(signal.Embeds[0].Description, "## Layout Shot / sq01 - sh002") {
-		t.Errorf("description = %q, want the legacy title as the heading", signal.Embeds[0].Description)
+	if signal.Embeds[0].Title != "Layout Shot / sq01 - sh002" {
+		t.Errorf("title = %q, want the legacy title", signal.Embeds[0].Title)
+	}
+}
+
+func TestForumFlapWarningHasNoMentions(t *testing.T) {
+	signal := ForumFlapWarning("https://kitsu.example/t/1", 4, 12*time.Minute, "ja")
+	for _, want := range []string{"⚠️", "4 回", "12分", "タグは最新の状態を表しています。", "https://kitsu.example/t/1"} {
+		if !strings.Contains(signal.Content, want) {
+			t.Errorf("content %q missing %q", signal.Content, want)
+		}
+	}
+	if len(signal.AllowedUserIDs) != 0 || len(signal.AllowedRoleIDs) != 0 {
+		t.Errorf("warning must not mention: %+v", signal)
+	}
+	if strings.Contains(signal.Content, "<@") {
+		t.Errorf("warning content must not contain mentions: %q", signal.Content)
 	}
 }
 

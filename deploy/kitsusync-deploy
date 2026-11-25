@@ -12,14 +12,16 @@ done
 CONTROL_DIR=/etc/kitsusync-deploy
 STATE_DIR=/var/lib/kitsusync-deploy
 BACKUP_ROOT=/var/backups/kitsusync-deploy
-RUNTIME_ROOT=/home/ukyo_vfx/kitsusync
+LAYOUT_FILE=${CONTROL_DIR}/install-layout
+RUNTIME_USER=
+RUNTIME_ROOT=
 COMPOSE_FILE=${CONTROL_DIR}/docker-compose.yml
 ENV_FILE=${CONTROL_DIR}/.env.local
 PROVENANCE_FILE=${CONTROL_DIR}/provenance
 MODE_FILE=${CONTROL_DIR}/deployment-mode
 LEGACY_IMAGE_FILE=${CONTROL_DIR}/legacy-image.id
 FRESH_PENDING_FILE=${STATE_DIR}/fresh-install.pending
-FRESH_SEED_MARKER=${RUNTIME_ROOT}/.fresh-install-seed
+FRESH_SEED_MARKER=
 IMAGE_ARCHIVE=${STATE_DIR}/kitsusync-image.tar
 SQLITE_BACKUP=/usr/local/libexec/kitsusync-sqlite-backup
 IMAGE_IDENTITY=/usr/local/libexec/kitsusync-image-identity
@@ -392,19 +394,56 @@ DOCKER_CONFIG=/root/.docker
 export HOME DOCKER_CONFIG
 DOCKER_BIN=/usr/bin/docker
 cd /
-for executable in /usr/bin/docker /usr/bin/curl /usr/bin/sha256sum /usr/bin/stat /usr/bin/tar /usr/bin/python3 /usr/bin/env /usr/bin/flock /usr/bin/timeout "${SQLITE_BACKUP}" "${IMAGE_IDENTITY}" "${RUNTIME_STATE}" "${RESTORE_STATE}"; do [[ -x "${executable}" ]] || die "required deployment executable is unavailable"; done
+for executable in /usr/bin/docker /usr/bin/curl /usr/bin/sha256sum /usr/bin/stat /usr/bin/tar /usr/bin/python3 /usr/bin/env /usr/bin/flock /usr/bin/timeout /usr/bin/id /usr/bin/dirname "${SQLITE_BACKUP}" "${IMAGE_IDENTITY}" "${RUNTIME_STATE}" "${RESTORE_STATE}"; do [[ -x "${executable}" ]] || die "required deployment executable is unavailable"; done
 sqlite_backup() { /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${SQLITE_BACKUP}" "$@"; }
 runtime_state() { /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${RUNTIME_STATE}" "$@"; }
 
 secure_dir() { [[ -d "$1" && ! -L "$1" && "$(/usr/bin/stat -c '%u:%g:%a' "$1")" == "0:0:$2" ]] || die "trusted directory is unsafe"; }
 secure_file() { [[ -f "$1" && ! -L "$1" && "$(/usr/bin/stat -c '%u:%g:%a' "$1")" == "0:0:$2" ]] || die "trusted file is unsafe"; }
 reject_env_controls() { ! /usr/bin/grep -Eq '^[[:space:]]*(export[[:space:]]+)?(DOCKER_|COMPOSE_)[A-Za-z0-9_]*[[:space:]]*=' "$1" || die "protected environment contains Docker/Compose control variables"; }
+load_install_layout() {
+  local path="$1" line key val seen_user=false seen_dir=false line_count=0
+  local parsed_user="" parsed_dir="" parsed_parent=""
+  secure_file "${path}" 600
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    line_count=$((line_count + 1))
+    (( line_count <= 2 )) || die "install-layout must contain exactly RUNTIME_USER and RUNTIME_DIR"
+    [[ "${line}" == *=* ]] || die "install-layout line is malformed"
+    key="${line%%=*}"
+    val="${line#*=}"
+    case "${key}" in
+      RUNTIME_USER)
+        [[ "${seen_user}" == false ]] || die "install-layout has duplicate RUNTIME_USER"
+        seen_user=true
+        parsed_user="${val}"
+        ;;
+      RUNTIME_DIR)
+        [[ "${seen_dir}" == false ]] || die "install-layout has duplicate RUNTIME_DIR"
+        seen_dir=true
+        parsed_dir="${val}"
+        ;;
+      *)
+        die "install-layout contains unsupported key"
+        ;;
+    esac
+  done < "${path}"
+  [[ "${seen_user}" == true && "${seen_dir}" == true && "${line_count}" -eq 2 ]] || die "install-layout must contain exactly RUNTIME_USER and RUNTIME_DIR"
+  [[ "${parsed_user}" =~ ^[a-z_][a-z0-9_-]*$ ]] || die "install-layout RUNTIME_USER is invalid"
+  /usr/bin/id "${parsed_user}" >/dev/null 2>&1 || die "install-layout RUNTIME_USER account does not exist"
+  [[ "${parsed_dir}" =~ ^(/[A-Za-z0-9._+-]+)+$ && "${parsed_dir}" != *".."* && "${parsed_dir}" != *"/." && "${parsed_dir}" != *"/./"* ]] || die "install-layout RUNTIME_DIR is invalid"
+  parsed_parent="$(/usr/bin/dirname -- "${parsed_dir}")"
+  [[ -d "${parsed_parent}" && ! -L "${parsed_parent}" ]] || die "runtime parent directory is unavailable or unsafe"
+  RUNTIME_USER="${parsed_user}"
+  RUNTIME_ROOT="${parsed_dir}"
+  FRESH_SEED_MARKER="${RUNTIME_ROOT}/.fresh-install-seed"
+}
 secure_dir "${CONTROL_DIR}" 700; secure_dir "${STATE_DIR}" 700; secure_dir "${BACKUP_ROOT}" 700
 # Serialize the entire backup/deploy/recovery transaction, including preflight.
 acquire_deployment_lock "${STATE_DIR}/deploy.lock"
 [[ ! -e "${STATE_DIR}/deployment-maintenance.pending" && ! -L "${STATE_DIR}/deployment-maintenance.pending" ]] || die "deployment helper maintenance recovery is pending"
 [[ ! -e "${STATE_DIR}/release-registration.pending" && ! -L "${STATE_DIR}/release-registration.pending" ]] || die "release registration recovery is pending"
 for file in "${COMPOSE_FILE}" "${ENV_FILE}" "${PROVENANCE_FILE}" "${MODE_FILE}" "${IMAGE_ARCHIVE}"; do secure_file "${file}" 600; done
+load_install_layout "${LAYOUT_FILE}"
 reject_env_controls "${ENV_FILE}"
 [[ -d "${RUNTIME_ROOT}" && ! -L "${RUNTIME_ROOT}" && "$(/usr/bin/stat -c '%u:%g:%a' "${RUNTIME_ROOT}")" == 0:0:755 ]] || die "runtime root is replaceable or unsafe"
 [[ -d "${RUNTIME_ROOT}/data" && ! -L "${RUNTIME_ROOT}/data" && "$(/usr/bin/stat -c '%u:%g:%a' "${RUNTIME_ROOT}/data")" == 10001:10001:700 ]] || die "runtime data directory is unsafe"
