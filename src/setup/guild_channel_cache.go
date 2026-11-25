@@ -107,6 +107,19 @@ type guildChannelView struct {
 
 func (v guildChannelView) hasData() bool { return len(v.body) > 0 }
 
+// cachedBody returns the stored raw channel list body for guildID without
+// triggering a fetch.
+func (c *guildChannelsCache) cachedBody(guildID string) ([]byte, bool) {
+	guildID = strings.TrimSpace(guildID)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry := c.entries[guildID]
+	if entry == nil || len(entry.body) == 0 {
+		return nil, false
+	}
+	return entry.body, true
+}
+
 // view returns the cached snapshot without waiting on the network. A missing
 // or expired entry only kicks a background refresh, so the page renders
 // immediately and a later render picks up the new data.

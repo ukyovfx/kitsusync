@@ -190,6 +190,9 @@ func TestForumAutoCreateColorsReusedForumTags(t *testing.T) {
 		return existing, nil
 	}
 	db := newForumPageDB(t)
+	guildChannelListCache.entries["g1"] = &guildChannelCacheEntry{
+		body: []byte(`[{"id":"cat-1","name":"Category","type":4},{"id":"f-anim","name":"Animation","type":15,"parent_id":"cat-1"},{"id":"f-comp","name":"Compositing","type":15,"parent_id":"cat-1"}]`),
+	}
 	if err := db.Model(&model.Project{}).Where("kitsu_project_id = ?", "p1").Update("discord_category_id", "cat-1").Error; err != nil {
 		t.Fatal(err)
 	}

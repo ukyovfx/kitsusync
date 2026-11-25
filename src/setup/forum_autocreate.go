@@ -361,6 +361,13 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 				if err != nil {
 					return settings, fmt.Errorf("%w: Discordのフォーラム一覧を取得できませんでした: %w", errForumCreateAction, err)
 				}
+				if parentID != "" {
+					if body, ok := guildChannelListCache.cachedBody(guildID); ok {
+						if channels, err := decodeGuildChannelsBody(body); err == nil && !discordCategoryExists(channels, parentID) {
+							parentID = ""
+						}
+					}
+				}
 				existingForums = map[string]forumChannelInfo{}
 				for _, forum := range existing {
 					if forum.ParentID != parentID {

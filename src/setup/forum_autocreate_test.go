@@ -175,6 +175,9 @@ func TestForumAutoCreateResumesFromCreatedButUnsavedForums(t *testing.T) {
 		}, nil
 	}
 	db := newForumPageDB(t)
+	guildChannelListCache.entries["g1"] = &guildChannelCacheEntry{
+		body: []byte(`[{"id":"cat-1","name":"Category","type":4},{"id":"f-anim","name":"animation","type":15,"parent_id":"cat-1"},{"id":"f-comp","name":"compositing","type":15,"parent_id":"cat-1"}]`),
+	}
 	if err := db.Model(&model.Project{}).Where("kitsu_project_id = ?", "p1").Update("discord_category_id", "cat-1").Error; err != nil {
 		t.Fatal(err)
 	}
@@ -241,6 +244,9 @@ func TestForumAutoCreateAddsMissingTagsToReusedForum(t *testing.T) {
 		return tags, nil
 	}
 	db := newForumPageDB(t)
+	guildChannelListCache.entries["g1"] = &guildChannelCacheEntry{
+		body: []byte(`[{"id":"cat-1","name":"Category","type":4},{"id":"f-anim","name":"animation","type":15,"parent_id":"cat-1"},{"id":"f-comp","name":"compositing","type":15,"parent_id":"cat-1"}]`),
+	}
 	if err := db.Model(&model.Project{}).Where("kitsu_project_id = ?", "p1").Update("discord_category_id", "cat-1").Error; err != nil {
 		t.Fatal(err)
 	}
@@ -399,6 +405,9 @@ func TestForumAutoCreateCreatesForumUnderProductionCategory(t *testing.T) {
 		return forum, nil
 	}
 	db := newForumPageDB(t)
+	guildChannelListCache.entries["g1"] = &guildChannelCacheEntry{
+		body: []byte(`[{"id":"cat-1","name":"Category","type":4},{"id":"f-anim","name":"animation","type":15,"parent_id":"cat-1"},{"id":"f-comp","name":"compositing","type":15,"parent_id":"cat-1"}]`),
+	}
 	if err := db.Model(&model.Project{}).Where("kitsu_project_id = ?", "p1").Update("discord_category_id", "cat-1").Error; err != nil {
 		t.Fatal(err)
 	}
@@ -412,6 +421,92 @@ func TestForumAutoCreateCreatesForumUnderProductionCategory(t *testing.T) {
 	}
 	if strings.Join(parents, ",") != "cat-1" {
 		t.Fatalf("created forums under parents %v, want cat-1", parents)
+	}
+}
+
+func TestForumAutoCreateIgnoresDeletedCategory(t *testing.T) {
+	stubForumLookups(t, nil)
+	tags := []forumTagInfo{{ID: "t1", Name: "WFA"}, {ID: "t2", Name: "RETAKE"}, {ID: "t3", Name: "DONE"}, {ID: "t4", Name: "WIP"}}
+	oldLister := forumChannelLister
+	t.Cleanup(func() { forumChannelLister = oldLister })
+	forumChannelLister = func(string, string) ([]forumChannelInfo, error) {
+		return []forumChannelInfo{{ID: "f-anim", Name: "Animation", ParentID: "", Tags: tags}}, nil
+	}
+	var created []string
+	var parents []string
+	oldCreate := forumCreateChannel
+	t.Cleanup(func() { forumCreateChannel = oldCreate })
+	forumCreateChannel = func(guildID, parentID, name string, tags []forumAutoTag, botToken string) (forumChannelInfo, error) {
+		created = append(created, name)
+		parents = append(parents, parentID)
+		forum := forumChannelInfo{ID: "new-" + name, Name: name}
+		for _, tag := range tags {
+			forum.Tags = append(forum.Tags, forumTagInfo{ID: "newtag-" + tag.Name, Name: tag.Name})
+		}
+		return forum, nil
+	}
+	db := newForumPageDB(t)
+	guildChannelListCache.entries["g1"] = &guildChannelCacheEntry{
+		body: []byte(`[{"id":"f-anim","name":"Animation","type":15}]`),
+	}
+	if err := db.Model(&model.Project{}).Where("kitsu_project_id = ?", "p1").Update("discord_category_id", "cat-deleted").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	form := url.Values{"project": {"p1"}, "guild_id": {"g1"}, "action": {"create_forums"}}
+	w := forumPost(t, db, form)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+	}
+	if strings.Join(created, ",") != "Compositing" {
+		t.Fatalf("created = %v, want [Compositing] (Animation should be reused as top-level)", created)
+	}
+	if strings.Join(parents, ",") != "" {
+		t.Fatalf("created under parents %v, want empty parent", parents)
+	}
+	loaded, ok, err := model.LoadProductionForumSettings(db, "p1")
+	if err != nil || !ok {
+		t.Fatalf("load: ok=%v err=%v", ok, err)
+	}
+	if loaded.Routes[0].ForumChannelID != "f-anim" || loaded.Routes[1].ForumChannelID != "new-Compositing" {
+		t.Fatalf("routes = %+v", loaded.Routes)
+	}
+}
+
+func TestForumAutoCreateIgnoresNonCategoryParent(t *testing.T) {
+	stubForumLookups(t, nil)
+	stubNoExistingForums(t)
+	oldTypes := forumTaskTypeLister
+	t.Cleanup(func() { forumTaskTypeLister = oldTypes })
+	forumTaskTypeLister = func(*gorm.DB, string) []kitsu.TaskType {
+		return []kitsu.TaskType{{ID: "tt-anim", Name: "Animation"}}
+	}
+	var parents []string
+	oldCreate := forumCreateChannel
+	t.Cleanup(func() { forumCreateChannel = oldCreate })
+	forumCreateChannel = func(guildID, parentID, name string, tags []forumAutoTag, botToken string) (forumChannelInfo, error) {
+		parents = append(parents, parentID)
+		forum := forumChannelInfo{ID: "new-" + name, Name: name}
+		for _, tag := range tags {
+			forum.Tags = append(forum.Tags, forumTagInfo{ID: "newtag-" + tag.Name, Name: tag.Name})
+		}
+		return forum, nil
+	}
+	db := newForumPageDB(t)
+	guildChannelListCache.entries["g1"] = &guildChannelCacheEntry{
+		body: []byte(`[{"id":"ch-text","name":"general","type":0}]`),
+	}
+	if err := db.Model(&model.Project{}).Where("kitsu_project_id = ?", "p1").Update("discord_category_id", "ch-text").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	form := url.Values{"project": {"p1"}, "guild_id": {"g1"}, "action": {"create_forums"}}
+	w := forumPost(t, db, form)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+	}
+	if strings.Join(parents, ",") != "" {
+		t.Fatalf("created under parents %v, want empty parent when stored ID is not a category", parents)
 	}
 }
 
