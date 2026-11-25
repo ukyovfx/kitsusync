@@ -37,10 +37,16 @@ func newForumPageDB(t *testing.T) *gorm.DB {
 // guild channel cache, so both seams are replaced together.
 func stubForumLookups(t *testing.T, discordErr error) {
 	t.Helper()
-	oldTypes, oldStatuses, oldForums, oldCache := forumTaskTypeLister, forumStatusLister, forumChannelLister, guildChannelListCache
+	oldTypes, oldStatuses, oldForums, oldCache, oldCatCreator := forumTaskTypeLister, forumStatusLister, forumChannelLister, guildChannelListCache, forumCategoryCreator
 	t.Cleanup(func() {
-		forumTaskTypeLister, forumStatusLister, forumChannelLister, guildChannelListCache = oldTypes, oldStatuses, oldForums, oldCache
+		forumTaskTypeLister, forumStatusLister, forumChannelLister, guildChannelListCache, forumCategoryCreator = oldTypes, oldStatuses, oldForums, oldCache, oldCatCreator
 	})
+	forumCategoryCreator = func(string, string, string) (string, error) {
+		if discordErr != nil {
+			return "", discordErr
+		}
+		return "cat-auto", nil
+	}
 	forumTaskTypeLister = func(*gorm.DB, string) []kitsu.TaskType {
 		return []kitsu.TaskType{{ID: "tt-anim", Name: "Animation"}, {ID: "tt-comp", Name: "Compositing"}}
 	}

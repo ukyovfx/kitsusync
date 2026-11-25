@@ -649,6 +649,10 @@ func UpdateProjectGuildID(db *gorm.DB, kitsuProjectID, guildID string) error {
 	return db.Model(&Project{}).Where("kitsu_project_id = ?", kitsuProjectID).Update("discord_guild_id", guildID).Error
 }
 
+func UpdateProjectCategoryID(db *gorm.DB, kitsuProjectID, categoryID string) error {
+	return db.Model(&Project{}).Where("kitsu_project_id = ?", kitsuProjectID).Update("discord_category_id", categoryID).Error
+}
+
 func ResolveProjectGuildID(db *gorm.DB, kitsuProjectID, fallbackGuildID string) string {
 	if p := FindProjectByKitsuID(db, kitsuProjectID); p != nil && strings.TrimSpace(p.DiscordGuildID) != "" {
 		return strings.TrimSpace(p.DiscordGuildID)
