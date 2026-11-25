@@ -77,11 +77,15 @@ func TestResolveForumWFAReviewerTargetsUnionsCurrentAutomaticAndOverrides(t *tes
 	db, project := reviewerResolutionTestDB(t)
 	seedReviewerForumRoute(t, db, project, "task-1")
 	team := []kitsu.Person{
-		{ID: "person-auto", Active: true, Role: "artist", ProjectRole: "supervisor", FirstName: "Auto"},
+		{ID: "person-auto", Active: true, Role: "manager", Position: "Supervisor", FirstName: "Auto"},
+		{ID: "person-role-only", Active: true, Role: "supervisor", ProjectRole: "supervisor", Position: "Lead", FirstName: "RoleOnly"},
 		{ID: "person-override", Active: true, Role: "artist", ProjectRole: "artist", FirstName: "Override"},
 		{ID: "person-stale-guild", Active: true, Role: "artist", ProjectRole: "artist", FirstName: "Stale"},
 	}
 	if err := db.Create(&model.UserMap{KitsuID: "person-auto", KitsuName: "Auto", DiscordID: "123456789012345601"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.UserMap{KitsuID: "person-role-only", KitsuName: "RoleOnly", DiscordID: "123456789012345606"}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&model.UserMap{KitsuID: "person-override", KitsuName: "Override", DiscordID: "123456789012345602"}).Error; err != nil {
@@ -101,10 +105,11 @@ func TestResolveForumWFAReviewerTargetsUnionsCurrentAutomaticAndOverrides(t *tes
 			t.Fatal(err)
 		}
 	}
-	resolution := kitsu.ProjectTaskTypeSupervisorResolution{Team: team, Supervisors: []kitsu.Person{{ID: "person-auto", Departments: []string{"department-1"}}}}
+	resolution := kitsu.ProjectTaskTypeSupervisorResolution{Team: team, Supervisors: []kitsu.Person{{ID: "person-auto"}, {ID: "person-role-only"}}}
 	members := []DiscordGuildMember{
 		reviewerTestGuildMember("123456789012345601", "", "", ""),
 		reviewerTestGuildMember("123456789012345602", "", "", ""),
+		reviewerTestGuildMember("123456789012345606", "", "", ""),
 	}
 	installReviewerResolutionReaders(t, resolution, nil, members, nil, []DiscordGuildRole{
 		{ID: "123456789012345604", Name: "Reviewers", Mentionable: true},
@@ -184,29 +189,41 @@ func TestResolveForumWFAReviewerTargetsRequiresGlobalLinkAndCurrentGuildMembersh
 	}
 }
 
-func TestDepartmentlessTaskTypeKeepsOnlyValidatedExplicitReviewerTargets(t *testing.T) {
+func TestDepartmentlessTaskTypeIncludesPositionSupervisorAndExplicitTargets(t *testing.T) {
 	db, project := reviewerResolutionTestDB(t)
 	seedReviewerForumRoute(t, db, project, "task-1")
+	if err := db.Create(&model.UserMap{KitsuID: "person-pos", KitsuName: "Pos Supervisor", DiscordID: "123456789012345601"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.UserMap{KitsuID: "person-role", KitsuName: "Role Lead", DiscordID: "123456789012345602"}).Error; err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Create(&model.ProjectReviewerTarget{ProjectID: project.ID, TaskTypeID: "task-1", TargetKind: model.ReviewerTargetRole, DiscordID: "123456789012345604"}).Error; err != nil {
 		t.Fatal(err)
 	}
 	resolution := kitsu.ProjectTaskTypeSupervisorResolution{
 		TaskType: kitsu.TaskType{ID: "task-1"},
-		Team:     []kitsu.Person{{ID: "person", Active: true}},
-		Supervisors: []kitsu.Person{{
-			ID:          "person",
-			Departments: []string{"department-1"},
-		}},
+		Team: []kitsu.Person{
+			{ID: "person-pos", Active: true, Role: "manager", Position: "Supervisor"},
+			{ID: "person-role", Active: true, Role: "supervisor", Position: "Lead"},
+		},
+		Supervisors: []kitsu.Person{{ID: "person-pos"}, {ID: "person-role"}},
 	}
-	members := []DiscordGuildMember{reviewerTestGuildMember("123456789012345601", "", "", "")}
+	members := []DiscordGuildMember{
+		reviewerTestGuildMember("123456789012345601", "", "", ""),
+		reviewerTestGuildMember("123456789012345602", "", "", ""),
+	}
 	installReviewerResolutionReaders(t, resolution, nil, members, nil, []DiscordGuildRole{{ID: "123456789012345604", Name: "Reviewers", Mentionable: true}}, nil)
 	got, err := ResolveForumWFAReviewerTargets(db, "https://kitsu.example.test", "kitsu-token", "discord-token", project.KitsuProjectID, "task-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []model.ProjectReviewerTarget{{ProjectID: project.ID, TaskTypeID: "task-1", TargetKind: model.ReviewerTargetRole, DiscordID: "123456789012345604"}}
+	want := []model.ProjectReviewerTarget{
+		{ProjectID: project.ID, TaskTypeID: "task-1", TargetKind: model.ReviewerTargetRole, DiscordID: "123456789012345604"},
+		{ProjectID: project.ID, TaskTypeID: "task-1", TargetKind: model.ReviewerTargetUser, DiscordID: "123456789012345601"},
+	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Departmentless Task Type targets=%+v want only explicit Role %+v", got, want)
+		t.Fatalf("Departmentless Task Type targets=%+v want %+v", got, want)
 	}
 }
 

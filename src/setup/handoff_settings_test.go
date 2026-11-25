@@ -430,14 +430,25 @@ func TestHandoffFallbackDefaultsToDisabledAndRendersMemberDropdown(t *testing.T)
 	w := httptest.NewRecorder()
 	HandoffSettingsHandler(db)(w, r)
 	body := w.Body.String()
-	if !strings.Contains(body, `<select id="handoff-fallback-user" name="fallback_user">`) {
-		t.Fatalf("expected member dropdown for fallback_user: %s", body)
+	if !strings.Contains(body, `data-handoff-fallback-summary>99999999999999999</span>`) {
+		t.Fatalf("expected static fallback member summary in view mode: %s", body)
+	}
+	if !strings.Contains(body, `<select id="handoff-fallback-user" name="fallback_user" hidden>`) {
+		t.Fatalf("expected hidden member dropdown for fallback_user in view mode: %s", body)
 	}
 	if !strings.Contains(body, `<option value="22222222222222222">`) || !strings.Contains(body, `<option value="99999999999999999" selected>99999999999999999</option>`) {
 		t.Fatalf("expected guild member and preserved raw fallback ID in dropdown: %s", body)
 	}
 	if strings.Contains(body, `<input id="handoff-fallback-user"`) {
 		t.Fatalf("fallback_user must not be a raw text input")
+	}
+
+	editReq := httptest.NewRequest(http.MethodGet, "/bot/admin/handoff?project=p1&lang=ja&edit=1", nil)
+	editW := httptest.NewRecorder()
+	HandoffSettingsHandler(db)(editW, editReq)
+	editBody := editW.Body.String()
+	if !strings.Contains(editBody, `<select id="handoff-fallback-user" name="fallback_user">`) {
+		t.Fatalf("expected visible member dropdown for fallback_user in edit mode: %s", editBody)
 	}
 }
 
@@ -485,5 +496,40 @@ func TestHandoffFallbackFieldOmittedUnlessUsersAndEmptyTaskTypesMessage(t *testi
 	}
 	if !strings.Contains(body, `href="/bot/admin/bot?lang=en"`) {
 		t.Fatal("handoff page must show a connection-check link when len(taskTypes) == 0")
+	}
+}
+
+func TestHandoffNoAssigneeGatedBehindEditMode(t *testing.T) {
+	stubHandoffTaskTypes(t, handoffTaskTypes())
+	db := newForumPageDB(t)
+	if err := model.SaveProductionHandoffSettings(db, model.ProductionHandoffSettings{
+		Config: model.ProductionHandoffConfig{
+			ProductionID: "p1",
+			NoAssignee:   model.HandoffFallbackAdmin,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	viewBody := handoffGet(t, db).Body.String()
+	if strings.Contains(viewBody, `<select name="no_assignee">`) {
+		t.Fatalf("view mode must not expose an operable no_assignee select: %s", viewBody)
+	}
+	if !strings.Contains(viewBody, `<select hidden name="no_assignee">`) {
+		t.Fatalf("view mode must keep no_assignee select hidden for edit toggle: %s", viewBody)
+	}
+	if !strings.Contains(viewBody, `data-handoff-noassignee-summary>Notify members with server administrator permissions</span>`) {
+		t.Fatalf("view mode must show no_assignee value as static text: %s", viewBody)
+	}
+
+	editReq := httptest.NewRequest(http.MethodGet, "/bot/admin/handoff?project=p1&lang=en&edit=1", nil)
+	editW := httptest.NewRecorder()
+	HandoffSettingsHandler(db)(editW, editReq)
+	editBody := editW.Body.String()
+	if !strings.Contains(editBody, `<select name="no_assignee">`) {
+		t.Fatalf("edit mode must expose the no_assignee select: %s", editBody)
+	}
+	if !strings.Contains(editBody, `data-handoff-noassignee-summary hidden>Notify members with server administrator permissions</span>`) {
+		t.Fatalf("edit mode must hide the static no_assignee summary: %s", editBody)
 	}
 }

@@ -1892,11 +1892,11 @@ func connectionHealthStatus(lang string, configured, healthy bool) connectionSta
 	return connectionStatus{Class: "warn", Label: t(lang, "要確認", "Needs review")}
 }
 
-func connectionSaveLabel(lang string, service string, configured bool) string {
+func connectionSaveLabel(lang string, configured bool) string {
 	if configured {
 		return t(lang, "接続を確認", "Check connection")
 	}
-	return t(lang, service+"接続を保存", "Save "+service+" connection")
+	return t(lang, "接続を保存", "Save connection")
 }
 
 func canonicalConnectionHealthStatus(lang string, configured, healthy bool) connectionStatus {
@@ -2149,15 +2149,14 @@ func renderConnectionsEditFormWithExternalURLState(lang string, r *http.Request,
 	} else if discordConfigured {
 		discordStatusNote = t(lang, "Discord Botの接続を確認してください。", "Check the Discord Bot connection.")
 	}
-	pageCancel := `<div class="button-row connections-navigation"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "キャンセル", "Cancel")) + `</a></div>`
-	body := `<div class="section-stack connections-edit-stack" id="connections-edit">` + pageCancel + notice +
+	body := `<div class="section-stack connections-edit-stack" id="connections-edit">` + notice +
 		`<div class="connections-edit-grid">` +
 		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><span class="status-pill ` + esc(kitsuStatus.Class) + `" role="status">` + esc(kitsuStatus.Label) + `</span></div>` +
-		`<form method="POST" class="connection-save-form" id="kitsu-connection-form"><input type="hidden" name="action" value="save_kitsu"><div class="connection-form-field"><label class="conn-field-label" for="kitsu-bot-token">` + esc(t(lang, "Kitsu Bot APIトークン", "Kitsu Bot API token")) + `</label>` + kitsuTokenInput + `</div>` + externalURLField + advancedDetails + `<div class="button-row connections-actions conn-card-actions"><button id="kitsu-recheck" type="submit" class="btn">` + esc(connectionSaveLabel(lang, "Kitsu", kitsuConfigured)) + `</button></div></form>` +
+		`<form method="POST" class="connection-save-form" id="kitsu-connection-form"><input type="hidden" name="action" value="save_kitsu"><div class="connection-form-field"><label class="conn-field-label" for="kitsu-bot-token">` + esc(t(lang, "Kitsu Bot APIトークン", "Kitsu Bot API token")) + `</label>` + kitsuTokenInput + `</div>` + externalURLField + advancedDetails + `<div class="button-row connections-actions conn-card-actions"><button id="kitsu-recheck" type="submit" class="btn">` + esc(connectionSaveLabel(lang, kitsuConfigured)) + `</button></div></form>` +
 		`<form method="POST" id="external-kitsu-url-form" hidden><input type="hidden" name="action" value="save_external_kitsu_url"></form></section>` +
 		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><span class="status-pill ` + esc(discordStatus.Class) + `" role="status">` + esc(discordStatus.Label) + `</span></div>` +
-		`<form method="POST" class="connection-save-form"><input type="hidden" name="action" value="save_discord"><div class="connection-form-field"><label class="conn-field-label" for="discord-bot-token">` + esc(t(lang, "Discord Botトークン", "Discord Bot Token")) + `</label>` + discordTokenInput + `</div><p class="conn-note" style="margin-top:10px;">` + esc(discordStatusNote) + `</p><div class="connection-field-row"><dt>` + esc(t(lang, "Bot", "Bot")) + `</dt><dd>` + esc(identity) + `</dd></div><div class="button-row connections-actions conn-card-actions"><button id="discord-recheck" type="submit" class="btn">` + esc(connectionSaveLabel(lang, "Discord Bot", discordConfigured)) + `</button></div></form></section>` +
-		`</div><div class="button-row connections-navigation connections-footer"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(t(lang, "プロダクション一覧へ戻る", "Back to Productions")) + `</a></div><script>(function(){var saveText='` + esc(t(lang, "変更を保存", "Save changes")) + `';var host=document.getElementById('kitsu-hostname');var hostSubmit=document.getElementById('kitsu-recheck');if(host&&hostSubmit){host.addEventListener('input',function(){if(host.value!==host.getAttribute('data-initial-value'))hostSubmit.textContent=saveText;});}var externalURL=document.getElementById('kitsu-external-url'),externalURLSaveButton=document.getElementById('save-external-kitsu-url');if(externalURL&&externalURLSaveButton){function updateExternalURLSaveState(){externalURLSaveButton.disabled=externalURL.value===externalURL.getAttribute('data-initial-value');}externalURL.addEventListener('input',updateExternalURLSaveState);updateExternalURLSaveState();}}());</script></div>`
+		`<form method="POST" class="connection-save-form"><input type="hidden" name="action" value="save_discord"><div class="connection-form-field"><label class="conn-field-label" for="discord-bot-token">` + esc(t(lang, "Discord Botトークン", "Discord Bot Token")) + `</label>` + discordTokenInput + `</div><p class="conn-note" style="margin-top:10px;">` + esc(discordStatusNote) + `</p><div class="connection-field-row"><dt>` + esc(t(lang, "Bot", "Bot")) + `</dt><dd>` + esc(identity) + `</dd></div><div class="button-row connections-actions conn-card-actions"><button id="discord-recheck" type="submit" class="btn">` + esc(connectionSaveLabel(lang, discordConfigured)) + `</button></div></form></section>` +
+		`</div><div class="button-row connections-navigation connections-footer"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "接続設定へ戻る", "Back to Connections")) + `</a></div><script>(function(){var saveText='` + esc(t(lang, "変更を保存", "Save changes")) + `';var host=document.getElementById('kitsu-hostname');var hostSubmit=document.getElementById('kitsu-recheck');if(host&&hostSubmit){host.addEventListener('input',function(){if(host.value!==host.getAttribute('data-initial-value'))hostSubmit.textContent=saveText;});}var externalURL=document.getElementById('kitsu-external-url'),externalURLSaveButton=document.getElementById('save-external-kitsu-url');if(externalURL&&externalURLSaveButton){function updateExternalURLSaveState(){externalURLSaveButton.disabled=externalURL.value===externalURL.getAttribute('data-initial-value');}externalURL.addEventListener('input',updateExternalURLSaveState);updateExternalURLSaveState();}}());</script></div>`
 	return body
 }
 
