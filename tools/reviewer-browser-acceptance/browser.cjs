@@ -1661,7 +1661,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           });
           if (!actions) return null;
           const select = actions.querySelector('select');
-          const button = actions.querySelector('button');
+          const row = actions.closest('tr');
+          const button = row ? row.querySelector('button[name="unlink_user_id"]') : null;
           const selectBox = select.getBoundingClientRect();
           const buttonBox = button ? button.getBoundingClientRect() : null;
           const midDiff = buttonBox ? Math.abs((selectBox.top + selectBox.height / 2) - (buttonBox.top + buttonBox.height / 2)) : null;

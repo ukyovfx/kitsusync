@@ -30,21 +30,24 @@ func TestUserLinkingBulkFormTargetsSaveButtonAndConfirmsUnlink(t *testing.T) {
 		t.Fatal("unlink button lost its identity for the no-JavaScript path")
 	}
 
+	if !strings.Contains(body, `<th>Action</th><th>Status</th>`) {
+		t.Fatal("expected Action header before Status header")
+	}
+	actionsStart := strings.Index(body, `data-label="Actions"><div class="user-link-actions">`)
 	statusStart := strings.Index(body, `data-label="Status">`)
-	actionsStart := strings.Index(body, `<div class="user-link-actions">`)
-	if statusStart < 0 || actionsStart < 0 || actionsStart <= statusStart {
-		t.Fatalf("expected Status cell before user-link-actions, got status=%d actions=%d", statusStart, actionsStart)
+	if actionsStart < 0 || statusStart < 0 || statusStart <= actionsStart {
+		t.Fatalf("expected Actions cell before Status cell, got actions=%d status=%d", actionsStart, statusStart)
 	}
-	statusCell := body[statusStart:actionsStart]
-	if !strings.Contains(statusCell, `class="user-link-status-inline"`) || !strings.Contains(statusCell, `name="unlink_user_id"`) {
-		t.Fatalf("expected unlink button inside status cell alongside status badge, got %s", statusCell)
-	}
-	actionEnd := strings.Index(body[actionsStart:], `</div>`)
-	if actionEnd < 0 {
-		t.Fatal("missing closing div for user-link-actions")
-	}
-	actionCell := body[actionsStart : actionsStart+actionEnd]
+	actionCell := body[actionsStart:statusStart]
 	if strings.Count(actionCell, "<select") != 1 || strings.Contains(actionCell, `name="unlink_user_id"`) {
 		t.Fatalf("expected action cell to contain exactly one select and no unlink button, got %s", actionCell)
+	}
+	statusEnd := strings.Index(body[statusStart:], `</td>`)
+	if statusEnd < 0 {
+		t.Fatal("missing closing td for Status cell")
+	}
+	statusCell := body[statusStart : statusStart+statusEnd]
+	if !strings.Contains(statusCell, `class="user-link-status-inline"`) || !strings.Contains(statusCell, `name="unlink_user_id"`) {
+		t.Fatalf("expected unlink button inside status cell alongside status badge, got %s", statusCell)
 	}
 }
