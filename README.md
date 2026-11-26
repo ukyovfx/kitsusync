@@ -268,7 +268,7 @@ See `.env.example` for the full template. Copy it to `.env.local` for local deve
 Start FileBrowser only when you explicitly need it:
 
 ```bash
-docker compose --profile debug up -d editor
+docker compose -f docker-compose.yml -f docker-compose.debug.yml --profile debug up -d editor
 ```
 
 FileBrowser is for local/debug inspection only.

@@ -1,0 +1,21 @@
+services:
+  editor:
+    profiles:
+      - debug
+    image: filebrowser/filebrowser@sha256:a469ea076d4a1b4b1d86a41d130f2f536cd9da996a2b1fb39c0d7635f9d89b9a
+    restart: unless-stopped
+    user: "1000:1000"
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - filebrowser_data:/database
+      - ./README.md:/srv/README.md:ro
+      - ./tpl:/srv/tpl:ro
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - FB_USERNAME=${FB_USERNAME}
+      - FB_PASSWORD=${FB_PASSWORD:?FB_PASSWORD is required}
+
+volumes:
+  filebrowser_data:
