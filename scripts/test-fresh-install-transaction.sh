@@ -7,9 +7,12 @@ set -euo pipefail
 [[ "$(. /etc/os-release; printf '%s' "$ID")" == ubuntu ]] || exit 1
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-runtime=/home/ukyo_vfx/kitsusync
+test_layout_user=kitsusync-test
+runtime_parent="/home/${test_layout_user}"
+runtime="${runtime_parent}/kitsusync"
+created_layout_user=false
 source_commit=b7b30157cb90c4500e8b00d3c26ac7038f5c8c10
-protected=(/etc/kitsusync-deploy /var/lib/kitsusync-deploy /var/backups/kitsusync-deploy "$runtime" /root/kitsusync-release-stage)
+protected=(/etc/kitsusync-deploy /var/lib/kitsusync-deploy /var/backups/kitsusync-deploy "$runtime" "$runtime_parent" /root/kitsusync-release-stage)
 tools=(/usr/local/sbin/kitsusync-deploy /usr/local/sbin/kitsusync-inspect /usr/local/sbin/kitsusync-release-apply
        /usr/local/libexec/kitsusync-sqlite-backup /usr/local/libexec/kitsusync-image-identity
        /usr/local/libexec/kitsusync-runtime-state /usr/local/libexec/kitsusync-restore-state
@@ -21,6 +24,7 @@ host_self_test_rule=false
 for path in "${protected[@]}" "${tools[@]}"; do
   sudo test ! -e "$path" && sudo test ! -L "$path" || { printf 'refusing existing fixture path: %s\n' "$path" >&2; exit 1; }
 done
+! id "${test_layout_user}" >/dev/null 2>&1 || { printf 'refusing existing fixture user: %s\n' "${test_layout_user}" >&2; exit 1; }
 [[ -z "$(docker ps -aq --filter label=com.docker.compose.project=kitsusync)" ]] || exit 1
 [[ -z "$(docker network ls -q --filter label=com.docker.compose.project=kitsusync)" ]] || exit 1
 if docker image inspect kitsusync:v0.4.6 >/dev/null 2>&1; then
@@ -47,6 +51,7 @@ cleanup() {
   docker image rm kitsusync:v0.4.6 >/dev/null 2>&1 || true
   sudo rm -rf -- "${protected[@]}"
   sudo rm -f -- "${tools[@]}" /etc/sudoers.d/kitsusync-deploy
+  if [[ "${created_layout_user}" == true ]]; then sudo userdel "${test_layout_user}" >/dev/null 2>&1 || true; fi
   rm -rf -- "${work}"
   exit "${result}"
 }
@@ -162,6 +167,8 @@ stage_bundle() {
   for file in "${source}"/*; do sudo install -o root -g root -m 0600 "${file}" "/root/kitsusync-release-stage/$(basename "${file}")"; done
   printf 'http://host.docker.internal:8080/\n' >"${work}/fresh-kitsu-hostname"
   sudo install -o root -g root -m 0600 "${work}/fresh-kitsu-hostname" /root/kitsusync-release-stage/fresh-kitsu-hostname
+  printf 'RUNTIME_USER=%s\nRUNTIME_DIR=%s\n' "${test_layout_user}" "${runtime}" >"${work}/install-layout"
+  sudo install -o root -g root -m 0600 "${work}/install-layout" /root/kitsusync-release-stage/install-layout
 }
 
 start_proxy_fixture() {
@@ -199,7 +206,9 @@ start_proxy_fixture() {
   fi
 }
 
-sudo install -d -o root -g root -m 0755 /home/ukyo_vfx
+sudo useradd -M -s /usr/sbin/nologin "${test_layout_user}"
+created_layout_user=true
+sudo install -d -o root -g root -m 0755 "${runtime_parent}"
 stage=build-bad-bundle
 build_bundle bad "${work}/bad-bundle"
 stage=proxy-topology

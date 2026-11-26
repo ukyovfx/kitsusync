@@ -19,7 +19,51 @@ protected environment seed. It never contains a Kitsu or Discord credential.
 An administrator stages the artifact at the fixed path
 `/root/kitsusync-release-stage`. The directory must be owned by root with mode
 `0700`; every staged file must be owned by root with mode `0600`. Do not place
-credentials in shell arguments or terminal output. For `fresh-install`, an
+credentials in shell arguments or terminal output.
+
+### Deployment layout record (`install-layout`)
+
+The deployment scripts do not hardcode an operator account or runtime directory
+and never accept them via CLI arguments or environment variables. Instead, the
+layout is supplied as a two-line `root:root` mode `0600` regular file (not a
+symlink) named `install-layout`:
+
+```text
+RUNTIME_USER=<operator account that owns the runtime and receives the sudoers entries>
+RUNTIME_DIR=<absolute path of the runtime directory>
+```
+
+`RUNTIME_USER` must match `^[a-z_][a-z0-9_-]*$` and exist as a local Linux
+account. `RUNTIME_DIR` must be an absolute path without `..`, and its parent
+directory must exist and not be a symlink.
+
+- **Fresh installs (`deployment_mode=fresh-install`)**: stage
+  `/root/kitsusync-release-stage/install-layout` (`root:root`, `0600`) alongside
+  the bundle files. Bootstrap validates the record, seeds `RUNTIME_DIR`,
+  generates `/etc/sudoers.d/kitsusync-deploy` for `RUNTIME_USER`, and installs
+  the validated record to `/etc/kitsusync-deploy/install-layout` (`root:root`,
+  `0600`).
+- **Recorded control file**: every successful bootstrap writes
+  `/etc/kitsusync-deploy/install-layout` (`root:root`, `0600`).
+  `kitsusync-deploy`, `kitsusync-preflight-collect`, and subsequent
+  `kitsusync-bootstrap` runs read the runtime layout strictly from this control
+  file and fail closed if it is missing or malformed. On an existing install, if
+  `/root/kitsusync-release-stage/install-layout` is also present alongside
+  `/etc/kitsusync-deploy/install-layout`, it must match the recorded file
+  exactly.
+- **One-time step for existing installs**: before adopting the release that
+  introduces `install-layout` on an already-bootstrapped host, `root` must
+  record the install's current layout into
+  `/etc/kitsusync-deploy/install-layout` (two lines, `root:root`, mode `0600`)
+  before running the new `kitsusync-bootstrap`, `kitsusync-deploy`, or
+  `kitsusync-preflight-collect`:
+
+```bash
+install -o root -g root -m 0600 /dev/null /etc/kitsusync-deploy/install-layout
+printf 'RUNTIME_USER=<operator-user>\nRUNTIME_DIR=<absolute-runtime-dir>\n' > /etc/kitsusync-deploy/install-layout
+```
+
+For `fresh-install`, an
 optional root-owned mode `0600` file named `fresh-kitsu-hostname` contains the
 single non-secret HTTP(S) Kitsu authority URL. Bootstrap validates that it has
 no userinfo, query, or fragment before constructing `.env.local`. When the file
@@ -42,7 +86,7 @@ tool and fresh-seed digests before installing:
 - `/usr/local/libexec/kitsusync-sqlite-backup` (`root:root`, `0700`)
 - `/usr/local/libexec/kitsusync-image-identity` (`root:root`, `0700`)
 - `/usr/local/libexec/kitsusync-preflight-collect` (`root:root`, `0700`)
-- `/etc/kitsusync-deploy/` (`root:root`, `0700`)
+- `/etc/kitsusync-deploy/` (`root:root`, `0700`), including `/etc/kitsusync-deploy/install-layout` (`root:root`, `0600`)
 - `/var/lib/kitsusync-deploy/` (`root:root`, `0700`)
 - `/var/backups/kitsusync-deploy/` (`root:root`, `0700`)
 - `/etc/sudoers.d/kitsusync-deploy` (`root:root`, `0440`)

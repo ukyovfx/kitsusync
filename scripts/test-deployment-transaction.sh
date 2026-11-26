@@ -8,8 +8,11 @@ set -euo pipefail
 }
 [[ "$(. /etc/os-release; printf '%s' "$ID")" == ubuntu ]] || exit 1
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-runtime=/home/ukyo_vfx/kitsusync
-protected=(/etc/kitsusync-deploy /var/lib/kitsusync-deploy /var/backups/kitsusync-deploy "$runtime")
+test_layout_user=kitsusync-test
+runtime_parent="/home/${test_layout_user}"
+runtime="${runtime_parent}/kitsusync"
+created_layout_user=false
+protected=(/etc/kitsusync-deploy /var/lib/kitsusync-deploy /var/backups/kitsusync-deploy "$runtime" "$runtime_parent")
 tools=(/usr/local/sbin/kitsusync-deploy /usr/local/sbin/kitsusync-inspect
        /usr/local/libexec/kitsusync-sqlite-backup /usr/local/libexec/kitsusync-image-identity
        /usr/local/libexec/kitsusync-runtime-state /usr/local/libexec/kitsusync-restore-state
@@ -17,7 +20,7 @@ tools=(/usr/local/sbin/kitsusync-deploy /usr/local/sbin/kitsusync-inspect
 for path in "${protected[@]}" "${tools[@]}"; do
   sudo test ! -e "$path" && sudo test ! -L "$path" || { printf 'refusing existing fixture path: %s\n' "$path" >&2; exit 1; }
 done
-sudo test ! -e /home/ukyo_vfx && sudo test ! -L /home/ukyo_vfx || exit 1
+! id "$test_layout_user" >/dev/null 2>&1 || { printf 'refusing existing fixture user: %s\n' "$test_layout_user" >&2; exit 1; }
 [[ -z "$(docker ps -aq --filter label=com.docker.compose.project=kitsusync)" ]] || exit 1
 [[ -z "$(docker network ls -q --filter name='^kitsusync_default$')" ]] || exit 1
 if docker image inspect kitsusync:v0.4.6 >/dev/null 2>&1; then
@@ -46,6 +49,7 @@ cleanup() {
   # All fixed paths were proven absent before this disposable fixture created them.
   sudo rm -rf -- "${protected[@]}"
   sudo rm -f -- "${tools[@]}"
+  if [[ "$created_layout_user" == true ]]; then sudo userdel "$test_layout_user" >/dev/null 2>&1 || true; fi
   rm -rf -- "$work"
 }
 trap 'cleanup "$?" "$BASH_COMMAND"' EXIT
@@ -114,9 +118,13 @@ DOCKER
 docker build --target legacy -t "$legacy_ref" "$work" >/dev/null
 docker build --target target -t kitsusync:v0.4.6 "$work" >/dev/null
 
+sudo useradd -M -s /usr/sbin/nologin "$test_layout_user"
+created_layout_user=true
 sudo install -d -o root -g root -m 0700 /etc/kitsusync-deploy /var/lib/kitsusync-deploy /var/backups/kitsusync-deploy
-sudo install -d -o root -g root -m 0755 "$runtime" "$runtime/tpl"
+sudo install -d -o root -g root -m 0755 "$runtime_parent" "$runtime" "$runtime/tpl"
 sudo install -d -o 10001 -g 10001 -m 0700 "$runtime/data"
+printf 'RUNTIME_USER=%s\nRUNTIME_DIR=%s\n' "$test_layout_user" "$runtime" >"$work/install-layout"
+sudo install -o root -g root -m 0600 "$work/install-layout" /etc/kitsusync-deploy/install-layout
 printf 'fixture-conf\n' >"$work/conf.toml"
 printf 'fixture-template\n' >"$work/template"
 printf 'fixture-secret-material\n' >"$work/key"

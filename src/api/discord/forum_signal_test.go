@@ -56,7 +56,7 @@ func TestRenderForumSignalRetakeCard(t *testing.T) {
 		Quote:      ".Environment_Hall_Door",
 		TaskURL:    "https://kitsu.example/t/1",
 		StatusName: "retake",
-		Assignees:  []string{"山田", "松尾"},
+		Assignees:  []string{"山田", "佐藤"},
 		UserIDs:    []string{"222222222222222222"},
 	})
 	embed := signal.Embeds[0]

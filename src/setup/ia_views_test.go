@@ -619,15 +619,15 @@ func TestDashboardAuditSummaryUsesCanonicalPersistedCount(t *testing.T) {
 func TestAuditLogRendersPersistedActorInJapaneseAndEnglish(t *testing.T) {
 	db := newIAViewDB(t)
 	for _, actor := range []model.AuditLog{
-		{ProjectName: "Human", ActorKind: model.AuditActorHuman, ActorID: "person-1", ActorName: "Ukyo Matsuo", Success: true},
+		{ProjectName: "Human", ActorKind: model.AuditActorHuman, ActorID: "person-1", ActorName: "Taro Yamada", Success: true},
 		{ProjectName: "System", ActorKind: model.AuditActorSystem, ActorID: "bot-1", Success: true},
 		{ProjectName: "Unknown", ActorKind: model.AuditActorUnknown, Success: true},
 	} {
 		model.WriteAuditLog(db, actor)
 	}
 	for _, tc := range []struct{ lang, human, system, unknown string }{
-		{"ja", "Ukyo Matsuo", "システム", "不明"},
-		{"en", "Ukyo Matsuo", "System", "Unknown"},
+		{"ja", "Taro Yamada", "システム", "不明"},
+		{"en", "Taro Yamada", "System", "Unknown"},
 	} {
 		t.Run(tc.lang, func(t *testing.T) {
 			w := httptest.NewRecorder()
@@ -1323,7 +1323,7 @@ func TestProductionTeamShowsLinkedDiscordDisplayName(t *testing.T) {
 		if token != "synthetic-token" {
 			t.Fatalf("unexpected Discord token %q", token)
 		}
-		return []DiscordGuildMember{reviewerTestGuildMember("123456789012345678", "ukyo", "Synthetic Discord Name", "")}, nil
+		return []DiscordGuildMember{reviewerTestGuildMember("123456789012345678", "taro", "Synthetic Discord Name", "")}, nil
 	}
 	t.Cleanup(func() { reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldReader, oldMembers })
 	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=participant-display-p&tab=users&lang=en", nil), p, "en", "synthetic-token")
@@ -1897,7 +1897,7 @@ func TestCurrentProductionUsersUseKitsuTeamInsteadOfManualAssociations(t *testin
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&model.UserMap{KitsuID: "person-linked", KitsuName: "Linked Person", DiscordID: "123456789012345678", DiscordDisplayName: "ukyo"}).Error; err != nil {
+	if err := db.Create(&model.UserMap{KitsuID: "person-linked", KitsuName: "Linked Person", DiscordID: "123456789012345678", DiscordDisplayName: "taro"}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&model.UserMap{KitsuID: "person-unlinked", KitsuName: "Unlinked Person", DiscordID: "", DiscordDisplayName: ""}).Error; err != nil {
@@ -1924,13 +1924,13 @@ func TestCurrentProductionUsersUseKitsuTeamInsteadOfManualAssociations(t *testin
 		}, nil
 	}
 	reviewerGuildMembersForGuild = func(_, _ string) ([]DiscordGuildMember, error) {
-		return []DiscordGuildMember{reviewerTestGuildMember("123456789012345678", "ukyo", "ukyo", "")}, nil
+		return []DiscordGuildMember{reviewerTestGuildMember("123456789012345678", "taro", "taro", "")}, nil
 	}
 	t.Cleanup(func() { reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldReader, oldMembers })
 
 	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=kitsu-team-production&tab=users&lang=en", nil), project, "en", "synthetic-token")
 	for _, want := range []string{
-		"Team", "Linked Person", "@ukyo", "Linked", "Unlinked Person", "Needs review", "Kitsu role",
+		"Team", "Linked Person", "@taro", "Linked", "Unlinked Person", "Needs review", "Kitsu role",
 		`<span class="production-team-status-inline"><span class="status-pill success" role="status">Linked</span><button type="submit" name="unlink_team_kitsu_id" value="person-linked" class="btn-ghost sm">Unlink</button></span>`,
 		`data-label="Status"><span class="status-pill warning" role="status">Needs review</span></td>`,
 	} {

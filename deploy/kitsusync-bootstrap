@@ -9,7 +9,9 @@ STAGE=/root/kitsusync-release-stage
 CONTROL=/etc/kitsusync-deploy
 STATE=/var/lib/kitsusync-deploy
 BACKUPS=/var/backups/kitsusync-deploy
-RUNTIME=/home/ukyo_vfx/kitsusync
+RUNTIME=
+RUNTIME_USER=
+RUNTIME_PARENT=
 SUDOERS=/etc/sudoers.d/kitsusync-deploy
 DOCKER_BIN=/usr/bin/docker
 CURL_BIN=/usr/bin/curl
@@ -40,6 +42,43 @@ secure_source() {
   [[ -f "${path}" && ! -L "${path}" ]] || die "staged input is missing or unsafe"
   metadata="$(/usr/bin/stat -c '%u:%g:%a' "${path}")"
   [[ "${metadata}" == "0:0:${expected_mode}" ]] || die "staged input ownership or mode is unsafe"
+}
+
+load_install_layout() {
+  local path="$1" line key val seen_user=false seen_dir=false line_count=0
+  local parsed_user="" parsed_dir="" parsed_parent=""
+  secure_source "${path}" 600
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    line_count=$((line_count + 1))
+    (( line_count <= 2 )) || die "install-layout must contain exactly RUNTIME_USER and RUNTIME_DIR"
+    [[ "${line}" == *=* ]] || die "install-layout line is malformed"
+    key="${line%%=*}"
+    val="${line#*=}"
+    case "${key}" in
+      RUNTIME_USER)
+        [[ "${seen_user}" == false ]] || die "install-layout has duplicate RUNTIME_USER"
+        seen_user=true
+        parsed_user="${val}"
+        ;;
+      RUNTIME_DIR)
+        [[ "${seen_dir}" == false ]] || die "install-layout has duplicate RUNTIME_DIR"
+        seen_dir=true
+        parsed_dir="${val}"
+        ;;
+      *)
+        die "install-layout contains unsupported key"
+        ;;
+    esac
+  done < "${path}"
+  [[ "${seen_user}" == true && "${seen_dir}" == true && "${line_count}" -eq 2 ]] || die "install-layout must contain exactly RUNTIME_USER and RUNTIME_DIR"
+  [[ "${parsed_user}" =~ ^[a-z_][a-z0-9_-]*$ ]] || die "install-layout RUNTIME_USER is invalid"
+  /usr/bin/id "${parsed_user}" >/dev/null 2>&1 || die "install-layout RUNTIME_USER account does not exist"
+  [[ "${parsed_dir}" =~ ^(/[A-Za-z0-9._+-]+)+$ && "${parsed_dir}" != *".."* && "${parsed_dir}" != *"/." && "${parsed_dir}" != *"/./"* ]] || die "install-layout RUNTIME_DIR is invalid"
+  parsed_parent="$(/usr/bin/dirname -- "${parsed_dir}")"
+  [[ -d "${parsed_parent}" && ! -L "${parsed_parent}" ]] || die "runtime parent directory is unavailable or unsafe"
+  RUNTIME_USER="${parsed_user}"
+  RUNTIME="${parsed_dir}"
+  RUNTIME_PARENT="${parsed_parent}"
 }
 
 [[ -d "${STAGE}" && ! -L "${STAGE}" ]] || die "fixed release stage is unavailable"
@@ -132,6 +171,19 @@ export KITSUSYNC_APP_VERSION="${version}" KITSUSYNC_IMAGE_TAG="v${version}"
 if [[ "${mode}" == fresh-install && -f "${CONTROL}/deployment-mode" && ! -L "${CONTROL}/deployment-mode" && "$(/usr/bin/tr -d '\r\n' <"${CONTROL}/deployment-mode")" == normal ]]; then
   die "fresh install has already completed"
 fi
+if [[ "${mode}" == fresh-install ]]; then
+  load_install_layout "${STAGE}/install-layout"
+elif [[ -e "${CONTROL}/install-layout" || -L "${CONTROL}/install-layout" ]]; then
+  load_install_layout "${CONTROL}/install-layout"
+  if [[ -e "${STAGE}/install-layout" || -L "${STAGE}/install-layout" ]]; then
+    secure_source "${STAGE}/install-layout" 600
+    /usr/bin/cmp -s "${STAGE}/install-layout" "${CONTROL}/install-layout" || die "staged install-layout does not match recorded ${CONTROL}/install-layout"
+  fi
+elif [[ -e "${STAGE}/install-layout" || -L "${STAGE}/install-layout" ]]; then
+  load_install_layout "${STAGE}/install-layout"
+else
+  die "install-layout is not recorded at ${CONTROL}/install-layout; record RUNTIME_USER and RUNTIME_DIR there (root:root, 0600) before running bootstrap"
+fi
 
 fresh_seed_tmp=
 fresh_env_source=
@@ -139,7 +191,7 @@ fresh_runtime_create=false
 runtime_tmp=
 cleanup_seed_tmp() {
   [[ -z "${fresh_seed_tmp}" ]] || /usr/bin/rm -rf -- "${fresh_seed_tmp}"
-  if [[ -n "${runtime_tmp}" && "${runtime_tmp}" == /home/ukyo_vfx/.kitsusync-fresh.* ]]; then /usr/bin/rm -rf -- "${runtime_tmp}"; fi
+  if [[ -n "${runtime_tmp}" && "${runtime_tmp}" == "${RUNTIME_PARENT%/}"/.kitsusync-fresh.* ]]; then /usr/bin/rm -rf -- "${runtime_tmp}"; fi
 }
 if [[ "${mode}" == fresh-install ]]; then
   fresh_seed_tmp="$(/usr/bin/mktemp -d)"
@@ -189,8 +241,8 @@ fi
 /usr/bin/install -d -o root -g root -m 0755 /usr/local/libexec
 if [[ "${mode}" == fresh-install ]]; then
   if [[ "${fresh_runtime_create}" == true ]]; then
-    [[ -d /home/ukyo_vfx && ! -L /home/ukyo_vfx ]] || die "runtime parent directory is unavailable or unsafe"
-    runtime_tmp="$(/usr/bin/mktemp -d /home/ukyo_vfx/.kitsusync-fresh.XXXXXX)"
+    [[ -d "${RUNTIME_PARENT}" && ! -L "${RUNTIME_PARENT}" ]] || die "runtime parent directory is unavailable or unsafe"
+    runtime_tmp="$(/usr/bin/mktemp -d "${RUNTIME_PARENT%/}/.kitsusync-fresh.XXXXXX")"
     /usr/bin/chown root:root "${runtime_tmp}"
     /usr/bin/chmod 0755 "${runtime_tmp}"
     /usr/bin/install -d -o root -g root -m 0755 "${runtime_tmp}/tpl"
@@ -227,6 +279,10 @@ fi
 /usr/bin/install -o root -g root -m 0600 "${STAGE}/docker-compose.yml" "${CONTROL}/docker-compose.yml"
 /usr/bin/install -o root -g root -m 0600 "${STAGE}/provenance.txt" "${CONTROL}/provenance"
 /usr/bin/install -o root -g root -m 0600 "${STAGE}/deployment-mode" "${CONTROL}/deployment-mode"
+layout_tmp="$(/usr/bin/mktemp)"
+printf 'RUNTIME_USER=%s\nRUNTIME_DIR=%s\n' "${RUNTIME_USER}" "${RUNTIME}" >"${layout_tmp}"
+/usr/bin/install -o root -g root -m 0600 "${layout_tmp}" "${CONTROL}/install-layout"
+/usr/bin/rm -f "${layout_tmp}"
 /usr/bin/install -o root -g root -m 0600 "${STAGE}/kitsusync-image.tar" "${STATE}/kitsusync-image.tar"
 if [[ "${mode}" == fresh-install ]]; then
   /usr/bin/install -o root -g root -m 0600 "${fresh_env_source}" "${CONTROL}/.env.local"
@@ -315,8 +371,8 @@ trap '/usr/bin/rm -f "${sudoers_tmp}"' EXIT
 {
   printf 'Defaults!/usr/local/sbin/kitsusync-deploy env_reset,secure_path=/usr/sbin:/usr/bin:/sbin:/bin\n'
   printf 'Defaults!/usr/local/sbin/kitsusync-inspect env_reset,secure_path=/usr/sbin:/usr/bin:/sbin:/bin\n'
-  printf 'ukyo_vfx ALL=(root) NOPASSWD: NOSETENV: /usr/local/sbin/kitsusync-deploy ""\n'
-  printf 'ukyo_vfx ALL=(root) NOPASSWD: NOSETENV: /usr/local/sbin/kitsusync-inspect ""\n'
+  printf '%s ALL=(root) NOPASSWD: NOSETENV: /usr/local/sbin/kitsusync-deploy ""\n' "${RUNTIME_USER}"
+  printf '%s ALL=(root) NOPASSWD: NOSETENV: /usr/local/sbin/kitsusync-inspect ""\n' "${RUNTIME_USER}"
 } >"${sudoers_tmp}"
 /usr/sbin/visudo -cf "${sudoers_tmp}" >/dev/null || die "generated sudoers policy is invalid"
 /usr/bin/install -o root -g root -m 0440 "${sudoers_tmp}" "${SUDOERS}"

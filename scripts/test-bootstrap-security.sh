@@ -67,12 +67,23 @@ require 'kitsusync-preflight-collect' "${bootstrap}"
 require 'PREFLIGHT_COLLECTOR_TOOL_SHA256' "${bundle}"
 require 'preflight_evidence_json=' "${inspect}"
 
+run_clean_docker_env() {
+  local -a unset_args=()
+  local var
+  while IFS= read -r var; do
+    case "${var}" in
+      DOCKER_*|COMPOSE_*) unset_args+=(--unset="${var}") ;;
+    esac
+  done < <(compgen -e)
+  env ${unset_args[@]+"${unset_args[@]}"} "$@"
+}
+
 for script in "${deploy}" "${inspect}" "${bootstrap}"; do
-  if "${script}" unexpected >/dev/null 2>"${tmp}/error"; then
+  if run_clean_docker_env "${script}" unexpected >/dev/null 2>"${tmp}/error"; then
     printf 'script accepted an argument: %s\n' "${script}" >&2; exit 1
   fi
   grep -Fq 'arguments are not accepted' "${tmp}/error"
-  if DOCKER_HOST=tcp://attacker.invalid "${script}" >/dev/null 2>"${tmp}/error"; then
+  if run_clean_docker_env DOCKER_HOST=tcp://attacker.invalid "${script}" >/dev/null 2>"${tmp}/error"; then
     printf 'script accepted Docker environment injection: %s\n' "${script}" >&2; exit 1
   fi
   grep -Fq 'inherited Docker/Compose control variables are not accepted' "${tmp}/error"
