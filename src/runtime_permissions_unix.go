@@ -9,12 +9,17 @@ import (
 	"syscall"
 )
 
+// applyProcessUmask restricts newly created files (including logs) to owner-only.
+func applyProcessUmask() {
+	syscall.Umask(0077)
+}
+
 // secureRuntimeDataFiles sets the process umask before SQLite opens the
 // database and repairs only known sensitive runtime files left by an older
 // process. It deliberately does not chmod the data directory or unrelated
 // files in a bind mount.
 func secureRuntimeDataFiles(dataDir string) error {
-	syscall.Umask(0077)
+	applyProcessUmask()
 	for _, name := range []string{"sqlite.db", "sqlite.db-wal", "sqlite.db-shm", "runtime-secret.key"} {
 		path := filepath.Join(dataDir, name)
 		info, err := os.Lstat(path)

@@ -20,7 +20,7 @@ func migrateWatcherTables(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	if err := db.AutoMigrate(
 		&model.HandoffEvent{}, &model.StudioTaskRoute{}, &model.ProductionTaskRoute{},
-		&model.StudioStatusPolicy{}, &model.AdminException{}, &model.NotificationDecision{},
+		&model.StudioStatusPolicy{}, &model.NotificationDecision{},
 		&model.ProductionHandoffConfig{}, &model.ProductionHandoffProductType{}, &model.ProductionHandoffRoute{},
 	); err != nil {
 		t.Fatalf("migrate watcher tables: %v", err)
@@ -228,7 +228,7 @@ func TestHandoffWatcherSuppressesClosedReceiver(t *testing.T) {
 	}
 }
 
-func TestHandoffWatcherNoRouteRaisesExceptionOnce(t *testing.T) {
+func TestHandoffWatcherNoRouteRecordsDecision(t *testing.T) {
 	db := newForumDB(t)
 	migrateWatcherTables(t, db)
 	seedWatcherSettings(t, db)
@@ -240,10 +240,6 @@ func TestHandoffWatcherNoRouteRaisesExceptionOnce(t *testing.T) {
 	result, err := watcher.WatchHandoffs(watcherPayloads("s-wip"), 0)
 	if err != nil || result.Suppressed != 1 {
 		t.Fatalf("result = %+v err=%v", result, err)
-	}
-	open, err := model.OpenAdminExceptions(db)
-	if err != nil || len(open) != 1 || open[0].Kind != model.ExceptionNoRoute {
-		t.Fatalf("exceptions = %+v err=%v", open, err)
 	}
 	var decision model.NotificationDecision
 	if err := db.Where("signal_kind = ?", "handoff").First(&decision).Error; err != nil {

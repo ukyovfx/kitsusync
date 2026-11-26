@@ -119,7 +119,7 @@ Do not disclose suspected vulnerabilities in a public issue. Follow `SECURITY.md
 - `editor` is debug-only:
 
 ```bash
-docker compose --profile debug up -d editor
+docker compose -f docker-compose.yml -f docker-compose.debug.yml --profile debug up -d editor
 ```
 
 - Do not change debug mounts to include `.env`, `conf.toml`, `sqlite.db`, or runtime secrets.

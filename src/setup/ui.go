@@ -164,7 +164,7 @@ button,input,select{font:inherit}
 .status-row-explanation{color:var(--muted);line-height:1.45;min-width:0;overflow-wrap:anywhere}
 .status-row-action{justify-self:end}
 .status-row-action .btn,.status-row-action .btn-ghost{white-space:nowrap}
-.pipeline-health-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}.system-observability-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.system-observability-grid article{min-width:0;padding:12px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025)}.system-observability-grid h3{margin:0 0 5px;font-size:15px}.system-observability-grid p{margin:0;color:var(--muted);font-size:.86rem}.pipeline-health-item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 14px;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(255,255,255,.025);min-width:0}.pipeline-health-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;grid-column:1 / -1}.pipeline-health-heading h3{margin:0;font-size:15px}.pipeline-health-item .field-help{margin:0;min-width:0}.pipeline-health-action{justify-self:end;align-self:end;white-space:nowrap}.pipeline-issues{display:grid;gap:8px;margin:0;padding:0;list-style:none}.pipeline-issues li{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}.pipeline-issues li:last-child{border-bottom:0}.pipeline-issues strong{color:#ffb4a7}.pipeline-issues li>span{min-width:0;overflow-wrap:anywhere}
+.pipeline-health-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}.system-observability-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.system-observability-grid article{min-width:0;padding:12px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025)}.system-observability-grid h3{margin:0 0 5px;font-size:15px}.system-observability-grid p{margin:0;color:var(--muted);font-size:.86rem}.pipeline-health-item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 14px;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(255,255,255,.025);min-width:0}.pipeline-health-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;grid-column:1 / -1}.pipeline-health-heading h3{margin:0;font-size:15px}.pipeline-health-item .field-help{margin:0;min-width:0}.pipeline-health-action{justify-self:end;align-self:end;white-space:nowrap}
 .status-badge{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;border-radius:999px;padding:5px 9px;border:1px solid rgba(255,255,255,.16);font-size:.78rem;font-weight:700;line-height:1.25}
 .status-badge-success{color:#d7f4d4;background:rgba(142,207,139,.12);border-color:rgba(142,207,139,.42)}
 .status-badge-warning{color:#fff1c4;background:rgba(255,200,80,.14);border-color:rgba(255,200,80,.44)}
@@ -665,8 +665,8 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .system-status-sections>.section-stack>.pipeline-health>.page-heading,.system-status-sections>.section-stack>.system-issues>.page-heading{padding-inline:var(--system-status-content-inset)}
   .system-status-sections .system-observability-grid>article{padding-inline:var(--system-status-content-inset)}
   .system-status-sections .pipeline-health-item{padding-inline:var(--system-status-content-inset)}
-  .system-status-sections>.system-issues>.empty,.system-status-sections>.system-issues>.pipeline-issues{margin-inline:var(--system-status-content-inset)}
-  .system-status-sections>.section-stack>.system-issues>.empty,.system-status-sections>.section-stack>.system-issues>.pipeline-issues{margin-inline:var(--system-status-content-inset)}
+  .system-status-sections>.system-issues>.empty{margin-inline:var(--system-status-content-inset)}
+  .system-status-sections>.section-stack>.system-issues>.empty{margin-inline:var(--system-status-content-inset)}
   .system-status-sections .system-observability-grid>article{min-width:0}
   .system-status-sections .pipeline-health-item{min-width:0}
   /* Phase 20: explicit vertical rhythm for the three System Status sections. */
@@ -680,7 +680,7 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .system-status-sections .system-observability-grid>article{gap:var(--system-status-internal-item-gap)}
   .system-status-sections .pipeline-health-grid{margin-top:var(--system-status-heading-to-content);row-gap:0}
   .system-status-sections .pipeline-health-item{padding-block:var(--system-status-heading-to-content)}
-  .system-status-sections>.section-stack>.system-issues>.empty,.system-status-sections>.section-stack>.system-issues>.pipeline-issues{margin-top:var(--system-status-heading-to-content)}
+  .system-status-sections>.section-stack>.system-issues>.empty{margin-top:var(--system-status-heading-to-content)}
   @media(max-width:760px){.system-status-sections>.system-observability,.system-status-sections>.section-stack>.pipeline-health,.system-status-sections>.section-stack>.system-issues{padding-top:var(--system-status-heading-to-content)}.system-status-sections>.system-observability{padding-top:0}}
   /* The lower System Status sections (liveness, handoff attention, exception
      queue, per-production visibility) share the upper sections' flat pattern:

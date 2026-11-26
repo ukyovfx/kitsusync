@@ -58,7 +58,7 @@ docker compose down
 The `editor` service (FileBrowser) is disabled by default. Start it explicitly only when needed:
 
 ```bash
-docker compose --profile debug up -d editor
+docker compose -f docker-compose.yml -f docker-compose.debug.yml --profile debug up -d editor
 ```
 <!-- END LOCAL DEVELOPMENT ONLY -->
 

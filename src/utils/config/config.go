@@ -144,12 +144,19 @@ func ReadFromPath(path string) (Config, error) {
 func (c *Config) Validate() []string {
 	var issues []string
 
+	// NOTE: These two checks are load-bearing, not dead validation. When
+	// conf.toml cannot be read, Read() logs the failure but the process
+	// continues with zero-value defaults, so these [FATAL] issues are the
+	// mechanism that makes the app fail fast instead of starting with an
+	// empty configuration. Removing them made the staging runtime E2E hang:
+	// the app started with no config and never exited (PR 388 CI, 2026-11-26).
 	if c.Discord.EmbedsPerRequests <= 0 {
 		issues = append(issues, "[FATAL] discord.embedsPerRequests must be greater than zero")
 	}
 	if c.Discord.RequestsPerMinute <= 0 {
 		issues = append(issues, "[FATAL] discord.requestsPerMinute must be greater than zero")
 	}
+
 	if c.Kitsu.PollIntervalSeconds != 0 && (c.Kitsu.PollIntervalSeconds < minPollIntervalSeconds || c.Kitsu.PollIntervalSeconds > maxPollIntervalSeconds) {
 		issues = append(issues, fmt.Sprintf("[FATAL] kitsu.pollIntervalSeconds must be between %d and %d", minPollIntervalSeconds, maxPollIntervalSeconds))
 	}

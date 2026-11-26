@@ -243,7 +243,6 @@ func saveProductionHandoffForm(db *gorm.DB, r *http.Request, productionID string
 		if existing, ok, lerr := model.LoadProductionHandoffSettings(tx, productionID); lerr == nil && ok {
 			settings.Routes = existing.Routes
 			settings.ProductTypes = existing.ProductTypes
-			settings.Config.NotifyTiming = existing.Config.NotifyTiming
 		}
 		return model.SaveProductionHandoffSettings(tx, settings)
 	})
@@ -309,9 +308,6 @@ func routeTargetCheckboxes(prefix, fromID string, taskTypes []kitsu.TaskType, se
 	var b strings.Builder
 	for _, taskType := range taskTypes {
 		if taskType.ID == fromID {
-			if _, ok := chosen[fromID]; ok {
-				b.WriteString(`<input type="hidden" name="` + esc(prefix+fromID) + `" value="` + esc(fromID) + `">`)
-			}
 			continue
 		}
 		checked := ""

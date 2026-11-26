@@ -82,7 +82,6 @@ func (w HandoffWatcher) WatchHandoffs(payloads []kitsu.MessagePayload, sinceTran
 		planners[productionID] = &pl
 		return &pl
 	}
-	noRouteRaised := map[string]bool{}
 	for _, transition := range transitions {
 		source, ok := byTask[transition.TaskID]
 		if !ok {
@@ -101,7 +100,7 @@ func (w HandoffWatcher) WatchHandoffs(payloads []kitsu.MessagePayload, sinceTran
 			// episode: no second voice.
 			continue
 		}
-		fired, suppressed := w.fireEpisode(source, transition, planner, byEntity[strings.TrimSpace(source.Entity.Entity.ID)], noRouteRaised)
+		fired, suppressed := w.fireEpisode(source, transition, planner, byEntity[strings.TrimSpace(source.Entity.Entity.ID)])
 		result.Fired += fired
 		result.Suppressed += suppressed
 	}
@@ -110,7 +109,7 @@ func (w HandoffWatcher) WatchHandoffs(payloads []kitsu.MessagePayload, sinceTran
 
 // fireEpisode records the handoff events of one done-nature entry and writes
 // the decision rows for every outcome (fired, digest, suppressed).
-func (w HandoffWatcher) fireEpisode(source kitsu.MessagePayload, transition model.ForumTransition, planner *Planner, entityPayloads []kitsu.MessagePayload, noRouteRaised map[string]bool) (fired, suppressed int) {
+func (w HandoffWatcher) fireEpisode(source kitsu.MessagePayload, transition model.ForumTransition, planner *Planner, entityPayloads []kitsu.MessagePayload) (fired, suppressed int) {
 	productionID := source.Project.Project.ID
 	sourceTaskID := source.Task.Task.ID
 	sourceTypeID := source.TaskType.TaskType.ID
@@ -141,12 +140,6 @@ func (w HandoffWatcher) fireEpisode(source kitsu.MessagePayload, transition mode
 		decision.SuppressReason = reason
 		decision.Facts = model.DecisionFactsJSON(map[string]interface{}{"origin": origin})
 		_ = model.RecordNotificationDecision(w.DB, decision)
-		// The first no-route per task type is a human judgment (fix C-3):
-		// later episodes of the same type only count in the decision log.
-		if !noRouteRaised[sourceTypeID] {
-			noRouteRaised[sourceTypeID] = true
-			_ = model.RaiseAdminException(w.DB, model.ExceptionNoRoute, sourceTypeID, sourceTypeName, productionID, "受け渡しの配線がありません（done遷移で検出）")
-		}
 		return 0, 1
 	}
 

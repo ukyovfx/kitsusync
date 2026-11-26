@@ -345,7 +345,7 @@ location ~ ^/api/pictures/thumbnails/preview-files/ {
 This is expected behavior. FileBrowser only starts with the debug profile:
 
 ```bash
-docker compose --profile debug up -d editor
+docker compose -f docker-compose.yml -f docker-compose.debug.yml --profile debug up -d editor
 ```
 
 It is not intended for production use. See `docs/ENVIRONMENTS.md`.

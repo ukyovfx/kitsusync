@@ -1554,7 +1554,7 @@ func HealthHandler(db *gorm.DB, pollInterval time.Duration) http.HandlerFunc {
 			esc(t(lang, "通知確認と runtime / configuration checks をまとめて確認できます。", "Review delivery verification with the current runtime / configuration checks.")) +
 			`</p></div></div>` +
 			renderDiagnosticsPanel(lang, r, db, func() (string, string, string, string) {
-				return model.GetSetting(db, "kitsu.hostname"), storedRuntimeDiscordBotToken(db), model.GetSetting(db, "discord.guildID"), model.GetSetting(db, "discord.webhook_url")
+				return model.GetSetting(db, "kitsu.hostname"), storedRuntimeDiscordBotToken(db), "", model.GetSetting(db, "discord.webhook_url")
 			}, withLang("/bot/admin/health", r), false) +
 			`</div>`
 
@@ -1963,10 +1963,9 @@ func canonicalConnectionStatusesWithDiscord(lang string, db *gorm.DB, readiness 
 	} else {
 		kitsuHealthy = checkKitsuStatus(normalizeKitsuHostname(KitsuHostForUI(db))).Authenticated
 	}
-	guildID := strings.TrimSpace(model.GetSetting(db, "discord.guildID"))
 	botToken := storedRuntimeDiscordBotToken(db)
-	discord := checkDiscordStatus(botToken, guildID)
-	discordHealthy := discord.BotValid && (guildID == "" || discord.GuildValid)
+	discord := checkDiscordStatus(botToken, "")
+	discordHealthy := discord.BotValid
 	return canonicalConnectionHealthStatus(lang, readiness.KitsuConfigured, kitsuHealthy), canonicalConnectionHealthStatus(lang, readiness.DiscordConfigured, discordHealthy), discord
 }
 
@@ -2457,14 +2456,6 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
 		path := strings.TrimRight(r.URL.Path, "/")
-		if strings.HasSuffix(path, "/connections") {
-			target := "/bot/admin/bot"
-			if r.URL.RawQuery != "" {
-				target += "?" + r.URL.RawQuery
-			}
-			http.Redirect(w, r, target, http.StatusSeeOther)
-			return
-		}
 		isStatusesSubpage := strings.HasSuffix(path, "/statuses")
 		isWiringSubpage := strings.HasSuffix(path, "/wiring")
 		if r.Method == http.MethodGet && r.URL.Query().Get("legacy") != "1" {
@@ -2856,9 +2847,8 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 		} else {
 			kitsuHealthy = checkKitsuStatus(normalizeKitsuHostname(effectiveHost)).Authenticated
 		}
-		guildID := strings.TrimSpace(model.GetSetting(db, "discord.guildID"))
-		discordStatus := checkDiscordStatus(storedRuntimeDiscordBotToken(db), guildID)
-		discordHealthy := discordStatus.BotValid && (guildID == "" || discordStatus.GuildValid)
+		discordStatus := checkDiscordStatus(storedRuntimeDiscordBotToken(db), "")
+		discordHealthy := discordStatus.BotValid
 		kitsuConfigured := strings.TrimSpace(StoredRuntimeKitsuToken(db)) != ""
 		discordConfigured := strings.TrimSpace(storedRuntimeDiscordBotToken(db)) != ""
 		pageStatus := canonicalConnectionHealthStatus(lang, kitsuConfigured && discordConfigured, kitsuHealthy && discordHealthy)

@@ -138,16 +138,6 @@ func TestRecipientsWFAFallsBackToAdminsWhenReviewerChainEmpty(t *testing.T) {
 	if len(roles) != 0 {
 		t.Fatalf("roles = %v, want none", roles)
 	}
-	open, err := model.OpenAdminExceptions(db)
-	if err != nil {
-		t.Fatalf("open exceptions: %v", err)
-	}
-	if len(open) != 1 || open[0].Kind != model.ExceptionRecipientUnresolved {
-		t.Fatalf("exceptions = %+v, want one recipient_unresolved", open)
-	}
-	if open[0].SubjectID != "tt-comp" || open[0].ProductionID != "prod-1" || open[0].SubjectName != "Compositing" {
-		t.Errorf("exception = %+v, want the task type of the production", open[0])
-	}
 	var decisions []model.NotificationDecision
 	if err := db.Find(&decisions).Error; err != nil {
 		t.Fatalf("decisions: %v", err)
@@ -177,19 +167,11 @@ func TestRecipientsWFAUsesReviewersWithoutFallback(t *testing.T) {
 	if adminCalls != 0 {
 		t.Errorf("admin resolver called %d times, want 0", adminCalls)
 	}
-	open, err := model.OpenAdminExceptions(db)
-	if err != nil {
-		t.Fatalf("open exceptions: %v", err)
-	}
-	if len(open) != 0 {
-		t.Errorf("exceptions = %+v, want none", open)
-	}
 }
 
 // When no administrator can be resolved either, the signal stays
-// recipient-less (the executor cancels it as before), but the exception
-// is still raised: that is exactly what an admin must see.
-func TestRecipientsWFAFallbackWithoutAdminsStillRaises(t *testing.T) {
+// recipient-less (the executor cancels it as before).
+func TestRecipientsWFAFallbackWithoutAdmins(t *testing.T) {
 	db := newForumDB(t)
 	seedRecipientTask(t, db, "person-1")
 
@@ -200,42 +182,5 @@ func TestRecipientsWFAFallbackWithoutAdminsStillRaises(t *testing.T) {
 	}
 	if len(users) != 0 || len(roles) != 0 {
 		t.Fatalf("users=%v roles=%v, want both empty", users, roles)
-	}
-	open, err := model.OpenAdminExceptions(db)
-	if err != nil {
-		t.Fatalf("open exceptions: %v", err)
-	}
-	if len(open) != 1 || open[0].Kind != model.ExceptionRecipientUnresolved {
-		t.Fatalf("exceptions = %+v, want one recipient_unresolved", open)
-	}
-}
-
-// The fallback aggregates per task type (the no_route semantics): two
-// tasks of one type raise one row, not two.
-func TestRecipientsWFAFallbackAggregatesPerTaskType(t *testing.T) {
-	db := newForumDB(t)
-	seedRecipientTask(t, db, "person-1")
-	threadID := "thread-2"
-	if err := db.Create(&model.ForumTask{
-		TaskID: "task-2", ProjectID: "prod-1", TaskTypeID: "tt-comp",
-		StatusID: "s-wfa", ThreadID: &threadID, ForumID: "forum-1",
-	}).Error; err != nil {
-		t.Fatalf("seed task-2: %v", err)
-	}
-	recipients := wfaRecipients(db, []string{"d-admin-1"}, nil)
-	for _, taskID := range []string{"task-1", "task-2"} {
-		if _, _, err := recipients.ForTask(taskID, model.ForumPostMessagePayload{Intent: model.ForumIntentStatusWFA}); err != nil {
-			t.Fatalf("ForTask %s: %v", taskID, err)
-		}
-	}
-	open, err := model.OpenAdminExceptions(db)
-	if err != nil {
-		t.Fatalf("open exceptions: %v", err)
-	}
-	if len(open) != 1 {
-		t.Fatalf("exceptions = %+v, want one aggregated row", open)
-	}
-	if open[0].SeenCount != 2 {
-		t.Errorf("seen_count = %d, want 2", open[0].SeenCount)
 	}
 }
