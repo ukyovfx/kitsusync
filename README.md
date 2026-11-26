@@ -102,7 +102,7 @@ If you need these capabilities, keep them in roadmap planning as explicit scoped
 - `/bot/admin` — operational dashboard: system health, active projects, warnings
 - `/bot/admin/users` — map Kitsu users to Discord IDs for @mentions
 
-No public screenshot assets are committed. Legacy capture guidance is preserved in [`docs/archive/screenshots/`](docs/archive/screenshots/).
+Legacy capture guidance is preserved in [`docs/archive/screenshots/`](docs/archive/screenshots/).
 
 ## Getting Started
 
@@ -204,9 +204,8 @@ docker compose logs --tail=50 app
 curl http://localhost:8090/health
 ```
 
-The former temporary GCP direct-Compose procedure is historical only. Production
-recreation now uses the hardened `/usr/local/sbin/kitsusync-deploy` wrapper described in
-`docs/PRODUCTION_BOOTSTRAP.md` and `docs/ENVIRONMENTS.md`.
+Production recreation now uses the hardened `/usr/local/sbin/kitsusync-deploy`
+wrapper described in `docs/PRODUCTION_BOOTSTRAP.md` and `docs/ENVIRONMENTS.md`.
 
 ## First-Time Setup Flow
 
