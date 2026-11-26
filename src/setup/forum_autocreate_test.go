@@ -615,7 +615,7 @@ func TestForumPermissionCheckListsMissingPermissions(t *testing.T) {
 	old := forumPermissionGetter
 	t.Cleanup(func() { forumPermissionGetter = old })
 	// View Channel + Send Messages only.
-	forumPermissionGetter = func(string, string) (int64, error) { return (1 << 10) | (1 << 11), nil }
+	forumPermissionGetter = func(string, string, string) (int64, error) { return (1 << 10) | (1 << 11), nil }
 	settings := model.ProductionForumSettings{
 		Config: model.ProductionForumConfig{GuildID: "guild-1"},
 		Routes: []model.ProductionForumRoute{{TaskTypeName: "Compositing", ForumChannelID: "f1"}},

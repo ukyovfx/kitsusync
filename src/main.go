@@ -1156,6 +1156,9 @@ func main() {
 				guildID = model.ResolveProjectGuildID(db, project.KitsuProjectID, fallbackGuildID)
 			}
 			problems := forum.ValidateForumTargets(db, project.KitsuProjectID, guildID, setup.ForumChannelLister(), botToken)
+			if strings.TrimSpace(settings.Config.GuildID) == "" {
+				settings.Config.GuildID = guildID
+			}
 			problems = append(problems, setup.RefreshForumPermissionProblems(db, project.KitsuProjectID, project.Name, settings, botToken)...)
 			for _, problem := range problems {
 				slog.Warn("Forum target validation failed: "+problem, "event", "forum_target_validation_failed", "production_id", project.KitsuProjectID)

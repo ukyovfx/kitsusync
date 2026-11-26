@@ -471,8 +471,49 @@ var forumRequiredPermissions = []struct {
 }
 
 // forumPermissionGetter returns the Bot's effective permission bitfield in a
-// channel. It is a variable so tests can answer without Discord.
-var forumPermissionGetter = getBotChannelPermissions
+// channel within the configured guild (or across the Bot's guilds if guildID
+// is empty). It is a variable so tests can answer without Discord.
+var forumPermissionGetter = getBotChannelPermissionsInGuild
+
+func getBotUserID(botToken string) (string, error) {
+	botBody, status, err := botDo(http.MethodGet, discordAPI+"/users/@me", nil, botToken)
+	if err != nil || status != http.StatusOK {
+		return "", errors.New("Discord Bot identity could not be verified")
+	}
+	var bot struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(botBody, &bot) != nil || !isDiscordSnowflake(bot.ID) {
+		return "", errors.New("Discord Bot identity response was invalid")
+	}
+	return strings.TrimSpace(bot.ID), nil
+}
+
+// getBotChannelPermissionsInGuild returns the Bot's effective permission bits in
+// channelID within guildID without probing unrelated guilds. If guildID is
+// empty, it falls back to scanning the Bot's guilds.
+func getBotChannelPermissionsInGuild(guildID, channelID, botToken string) (int64, error) {
+	guildID = strings.TrimSpace(guildID)
+	if guildID == "" {
+		return getBotChannelPermissions(channelID, botToken)
+	}
+	channelID = strings.TrimSpace(channelID)
+	if !isDiscordSnowflake(guildID) || !isDiscordSnowflake(channelID) || strings.TrimSpace(botToken) == "" {
+		return 0, errors.New("Discord channel permission context is incomplete")
+	}
+	botID, err := getBotUserID(botToken)
+	if err != nil {
+		return 0, err
+	}
+	bits, found, err := botChannelPermissionsInGuild(guildID, channelID, botID, botToken)
+	if err != nil {
+		return 0, err
+	}
+	if !found {
+		return 0, errors.New("Discord channel is not in the configured Guild")
+	}
+	return bits, nil
+}
 
 // getBotChannelPermissions returns the Bot's effective permission bits in a
 // channel. Discord has no endpoint that reports them directly, so they are
@@ -482,17 +523,10 @@ func getBotChannelPermissions(channelID, botToken string) (int64, error) {
 	if !isDiscordSnowflake(channelID) || strings.TrimSpace(botToken) == "" {
 		return 0, errors.New("Discord channel permission context is incomplete")
 	}
-	botBody, status, err := botDo(http.MethodGet, discordAPI+"/users/@me", nil, botToken)
-	if err != nil || status != http.StatusOK {
-		return 0, errors.New("Discord Bot identity could not be verified")
+	botID, err := getBotUserID(botToken)
+	if err != nil {
+		return 0, err
 	}
-	var bot struct {
-		ID string `json:"id"`
-	}
-	if json.Unmarshal(botBody, &bot) != nil || !isDiscordSnowflake(bot.ID) {
-		return 0, errors.New("Discord Bot identity response was invalid")
-	}
-	botID := strings.TrimSpace(bot.ID)
 	guildBody, status, err := botDo(http.MethodGet, discordAPI+"/users/@me/guilds", nil, botToken)
 	if err != nil || status != http.StatusOK {
 		return 0, errors.New("Discord Bot Guilds could not be verified")
@@ -599,7 +633,7 @@ func checkForumPermissionIssues(productionID, productionName string, settings mo
 			continue
 		}
 		seen[route.ForumChannelID] = struct{}{}
-		bits, err := forumPermissionGetter(route.ForumChannelID, botToken)
+		bits, err := forumPermissionGetter(settings.Config.GuildID, route.ForumChannelID, botToken)
 		if err != nil {
 			slog.Warn("Forum permission check failed", "production_id", productionID, "task_type", route.TaskTypeName, "err", err)
 			problems = append(problems, ForumPermissionProblem{
@@ -696,7 +730,7 @@ func checkForumPermissions(settings model.ProductionForumSettings, botToken stri
 			continue
 		}
 		seen[route.ForumChannelID] = struct{}{}
-		bits, err := forumPermissionGetter(route.ForumChannelID, botToken)
+		bits, err := forumPermissionGetter(settings.Config.GuildID, route.ForumChannelID, botToken)
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("フォーラム %s の権限を確認できませんでした: %v", route.TaskTypeName, err))
 			continue

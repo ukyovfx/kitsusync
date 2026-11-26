@@ -23,7 +23,7 @@ func TestBatchC_ForumPermissionFailuresSurfaceOnHealthAndClear(t *testing.T) {
 	t.Cleanup(func() { forumPermissionGetter = oldGetter })
 
 	// Missing Send Messages (1<<11) and Manage Threads (1<<34).
-	forumPermissionGetter = func(string, string) (int64, error) {
+	forumPermissionGetter = func(string, string, string) (int64, error) {
 		return (1 << 10) | (1 << 14) | (1 << 16) | (1 << 38), nil
 	}
 	settings := model.ProductionForumSettings{
@@ -43,7 +43,7 @@ func TestBatchC_ForumPermissionFailuresSurfaceOnHealthAndClear(t *testing.T) {
 	}
 
 	// Now grant all required permissions and re-check.
-	forumPermissionGetter = func(string, string) (int64, error) {
+	forumPermissionGetter = func(string, string, string) (int64, error) {
 		return (1 << 10) | (1 << 11) | (1 << 14) | (1 << 16) | (1 << 34) | (1 << 38), nil
 	}
 	if got := RefreshForumPermissionProblems(db, "p-perm", "Perm Prod", settings, "bot-token"); len(got) != 0 {
