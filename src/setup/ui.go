@@ -1212,6 +1212,8 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .conn-kvrow .k{font-size:13px;color:var(--muted-2);flex:none}
   .conn-kvrow .v{font-size:13px;text-align:right}
   .conn-card-actions{margin-top:auto;padding-top:16px}
+  .hostrow{min-width:0}
+  .hostval{overflow-wrap:anywhere}
   .flat-section{margin-top:24px;padding-top:20px;border-top:1px solid var(--line)}
   .flat-section-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
   .flat-section-head h2{margin:0}
