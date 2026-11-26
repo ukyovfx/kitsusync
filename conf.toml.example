@@ -13,8 +13,6 @@ log = true
 
 [kitsu]
     hostname = "${KITSU_HOSTNAME}"
-    email = "${KITSU_RUNTIME_EMAIL}"
-    password = "${KITSU_RUNTIME_PASSWORD}"
     skipComments = false
     requestInterval = 1
     # Upper limit for one Kitsu response body in MiB (default 64). Large studios
