@@ -136,7 +136,9 @@ func handoffCardLine(event model.HandoffEvent, taskURL, lang string) string {
 		line = fmt.Sprintf("%s: %s ← %s の %s", event.EntityName, handoffProduct(event), event.SourceAuthorName, event.SourceTaskTypeName)
 	}
 	if taskURL != "" {
-		line += " " + handoffTaskURL(taskURL, event)
+		if link := handoffTaskURL(taskURL, event); link != "" {
+			return "[" + line + "](" + link + ")"
+		}
 	}
 	return line
 }

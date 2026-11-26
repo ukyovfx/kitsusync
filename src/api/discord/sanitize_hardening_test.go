@@ -65,6 +65,8 @@ func TestSendMessageSkipsInlineRetryWhileRateLimitGateActive(t *testing.T) {
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	defer server.Close()
+	oldWebhookBase := SetDiscordWebhookTestBase(server.URL)
+	defer SetDiscordWebhookTestBase(oldWebhookBase)
 
 	previous := discordRateLimitedUntil.Load()
 	discordRateLimitedUntil.Store(time.Now().Add(time.Minute).UnixNano())

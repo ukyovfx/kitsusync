@@ -26,6 +26,28 @@ import (
 
 var discordIDRegexp = regexp.MustCompile(`^[0-9]{17,19}$`)
 
+func writeAdminMutationAudit(db *gorm.DB, r *http.Request, action, projectID, projectName, guildID, entityName string, success bool, errMsg string) {
+	actorKind := model.AuditActorUnknown
+	actorName := ""
+	if email, _, _, ok := CurrentSessionKitsuAuth(r); ok && strings.TrimSpace(email) != "" {
+		actorKind = model.AuditActorHuman
+		actorName = strings.TrimSpace(email)
+	}
+	model.WriteAuditLog(db, model.AuditLog{
+		TaskID:       "admin:" + action,
+		ProjectID:    strings.TrimSpace(projectID),
+		ProjectName:  strings.TrimSpace(projectName),
+		GuildID:      strings.TrimSpace(guildID),
+		EntityName:   strings.TrimSpace(entityName),
+		NewStatus:    action,
+		Success:      success,
+		ErrorMessage: errMsg,
+		ActorKind:    actorKind,
+		ActorID:      actorName,
+		ActorName:    actorName,
+	})
+}
+
 func AdminIndexWithRuntime(db *gorm.DB, runtimeHealthy func() bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -495,6 +517,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 					effectiveGuildID = fallbackGuildID
 				}
 				execResult := executeConnectedProductionStrongDelete(lang, *project, effectiveGuildID, botToken, db)
+				writeAdminMutationAudit(db, r, "execute_current_ia_discord_delete", project.KitsuProjectID, project.Name, effectiveGuildID, project.Name, execResult.ConnectionDeleted, "")
 				if !execResult.ConnectionDeleted {
 					w.WriteHeader(http.StatusConflict)
 				}
@@ -533,6 +556,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 					effectiveGuildID = fallbackGuildID
 				}
 				execResult := executeConnectedProductionStrongDelete(lang, *project, effectiveGuildID, botToken, db)
+				writeAdminMutationAudit(db, r, "execute_current_ia_discord_delete", project.KitsuProjectID, project.Name, effectiveGuildID, project.Name, execResult.ConnectionDeleted, "")
 				if !execResult.ConnectionDeleted {
 					w.WriteHeader(http.StatusConflict)
 				}
@@ -560,7 +584,13 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 			if action == "remove_connection" {
 				expected := t(lang, "削除", "delete")
 				if projectID != "" && strings.TrimSpace(r.FormValue("confirm_text")) == expected {
+					project := model.FindProjectByKitsuID(db, projectID)
+					projectName, guildID := "", ""
+					if project != nil {
+						projectName, guildID = project.Name, project.DiscordGuildID
+					}
 					if err := DeleteProjectConnectionOnly(projectID, db); err == nil {
+						writeAdminMutationAudit(db, r, "remove_connection", projectID, projectName, guildID, projectName, true, "")
 						http.Redirect(w, r, withLang("/bot/admin/projects", r)+"&msg=saved", http.StatusSeeOther)
 						return
 					}
@@ -1559,11 +1589,14 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 						model.UpdateUserMap(db, unlinkID, user.KitsuName, user.KitsuEmail, "")
 						model.UpdateUserMapDisplayName(db, unlinkID, "")
 						db.Model(&model.UserMap{}).Where("id = ?", unlinkID).Update("discord_guild_id", "")
+						writeAdminMutationAudit(db, r, "unlink_global_user", "", "", "", strconv.FormatUint(uint64(unlinkID), 10), true, "")
 					}
 					http.Redirect(w, r, globalUserLinkingURL(r, userLinkingGuildForRedirect(db, r), "saved"), http.StatusSeeOther)
 					return
 				}
-				http.Redirect(w, r, saveGlobalUserLinks(db, r), http.StatusSeeOther)
+				redirect := saveGlobalUserLinks(db, r)
+				writeAdminMutationAudit(db, r, "save_global_links", "", "", "", "", true, "")
+				http.Redirect(w, r, redirect, http.StatusSeeOther)
 				return
 			}
 			id := parseUint(r.FormValue("user_id"))
@@ -1578,9 +1611,13 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 					model.UpdateUserMapDisplayName(db, id, "")
 					db.Model(&model.UserMap{}).Where("id = ?", id).Update("discord_guild_id", "")
 					saved = true
+					writeAdminMutationAudit(db, r, "remove_global_link", "", "", "", strconv.FormatUint(uint64(id), 10), true, "")
 				}
 			} else if action == "save_global_link" {
 				saved, redirectURL = saveGlobalUserLink(db, r)
+				if saved {
+					writeAdminMutationAudit(db, r, "save_global_link", "", "", "", strconv.FormatUint(uint64(id), 10), true, "")
+				}
 			}
 			msg := "error"
 			if saved {
@@ -1674,6 +1711,7 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 					model.DeleteUserMapByID(db, id)
 					deleteLegacyCheckerAssignmentsForUser(db, name, email)
 				}
+				writeAdminMutationAudit(db, r, "delete_user_link", activeProjectID, "", "", name, true, "")
 			default:
 				if name != "" && (discordID == "" || discordIDRegexp.MatchString(discordID)) {
 					if useProjectScoped {
@@ -1700,6 +1738,7 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 							syncLegacyCheckerAssignmentUserIdentity(db, previousName, previousEmail, name, email)
 						}
 					}
+					writeAdminMutationAudit(db, r, "save_user_link", activeProjectID, "", "", name, true, "")
 				}
 			}
 			http.Redirect(w, r, usersPageURL+"&msg=saved", http.StatusSeeOther)
@@ -2489,6 +2528,7 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					fmt.Fprint(w, adminPage(lang, t(lang, "タスクステータス", "Task statuses"), r, `<div class="section-stack"><div class="notice notice-error" role="alert"><strong>`+esc(t(lang, "保存できませんでした", "Could not save"))+`</strong>`+forumSaveErrorMarkup(lang, err, nil)+`</div></div>`))
 					return
 				}
+				writeAdminMutationAudit(db, r, "save_status_roles", "", "", "", "studio_status_roles", true, "")
 				http.Redirect(w, r, withLang("/bot/admin/bot/statuses", r)+"&msg=saved", http.StatusSeeOther)
 				return
 			}
@@ -2498,6 +2538,7 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					fmt.Fprint(w, adminPage(lang, t(lang, "受け渡しの配線", "Handoff wiring"), r, `<div class="section-stack"><div class="notice notice-error" role="alert"><strong>`+esc(t(lang, "保存できませんでした", "Could not save"))+`</strong><p>`+esc(err.Error())+`</p></div></div>`))
 					return
 				}
+				writeAdminMutationAudit(db, r, "save_studio_routes", "", "", "", "studio_handoff_routes", true, "")
 				http.Redirect(w, r, withLang("/bot/admin/bot/wiring", r)+"&msg=saved", http.StatusSeeOther)
 				return
 			}
@@ -2648,6 +2689,7 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					if kitsuReconnect != nil {
 						go kitsuReconnect()
 					}
+					writeAdminMutationAudit(db, r, "save_kitsu", "", "", "", hostForAuth, true, "")
 					http.Redirect(w, r, withLang("/bot/admin/bot", r)+"&msg=kitsu_bot_saved", http.StatusSeeOther)
 					return
 				}
@@ -2720,6 +2762,7 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					"stored_token_present", storedToken != "",
 					"fingerprint_match", storedToken == token,
 				)
+				writeAdminMutationAudit(db, r, "save_discord", "", "", "", "discord_bot_token", true, "")
 				http.Redirect(w, r, withLang("/bot/admin/bot", r)+"&msg=discord_saved", http.StatusSeeOther)
 				return
 			}

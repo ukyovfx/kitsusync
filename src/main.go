@@ -1111,6 +1111,9 @@ func main() {
 	if err := setup.MigrateRuntimeDiscordBotToken(db); err != nil {
 		slog.Warn("Discord runtime token migration deferred", "error_class", "credential_migration_failed")
 	}
+	if err := setup.MigrateProjectWebhookURLs(db); err != nil {
+		slog.Warn("Project webhook URL migration deferred", "error_class", "credential_migration_failed")
+	}
 	if persistedDiscordToken := setup.StoredRuntimeDiscordBotToken(db); persistedDiscordToken != "" {
 		os.Setenv("DISCORD_BOT_TOKEN", persistedDiscordToken)
 		slog.Debug("Discord runtime token loaded",
@@ -1361,7 +1364,7 @@ func main() {
 	registerAdminRoutes("")
 	registerAdminRoutes("/bot")
 
-	server := newApplicationHTTPServer(setup.RequestBodyLimit(setup.RequestTrace(setup.CSRFProtection(mux))))
+	server := newApplicationHTTPServer(setup.SecurityHeaders(setup.RequestBodyLimit(setup.RequestTrace(setup.CSRFProtection(mux)))))
 	go func() {
 		slog.Info("HTTP server listening on :8090  (/health, /login, /setup, /admin/*)")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

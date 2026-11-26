@@ -188,6 +188,63 @@ func MigrateRuntimeDiscordBotToken(db *gorm.DB) error {
 	return nil
 }
 
+func init() {
+	model.RegisterWebhookURLCrypto(encryptRuntimeSecret, decryptRuntimeSecret)
+}
+
+// MigrateProjectWebhookURLs upgrades legacy plaintext ProjectWebhook.WebhookURL
+// rows to encrypted form, verifying decrypt/read-back before committing.
+func MigrateProjectWebhookURLs(db *gorm.DB) error {
+	if db == nil {
+		return errors.New("database unavailable")
+	}
+	type rawWebhookRow struct {
+		ID         uint
+		WebhookURL string
+	}
+	var rows []rawWebhookRow
+	if err := db.Table("project_webhooks").Select("id, webhook_url").Order("id asc").Scan(&rows).Error; err != nil {
+		return err
+	}
+	for _, row := range rows {
+		raw := strings.TrimSpace(row.WebhookURL)
+		if raw == "" {
+			continue
+		}
+		if strings.HasPrefix(raw, "v1:") {
+			if _, err := decryptRuntimeSecret(raw); err != nil {
+				return fmt.Errorf("encrypted webhook URL %d is unavailable: %w", row.ID, err)
+			}
+			continue
+		}
+		ciphertext, err := encryptRuntimeSecret(raw)
+		if err != nil {
+			return fmt.Errorf("encrypt legacy webhook URL %d: %w", row.ID, err)
+		}
+		verified, err := decryptRuntimeSecret(ciphertext)
+		if err != nil || verified != raw {
+			return fmt.Errorf("encrypted webhook URL %d read-back verification failed", row.ID)
+		}
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Table("project_webhooks").Where("id = ?", row.ID).Update("webhook_url", ciphertext).Error; err != nil {
+				return fmt.Errorf("save encrypted webhook URL %d: %w", row.ID, err)
+			}
+			var stored rawWebhookRow
+			if err := tx.Table("project_webhooks").Select("id, webhook_url").Where("id = ?", row.ID).First(&stored).Error; err != nil {
+				return fmt.Errorf("read back encrypted webhook URL %d: %w", row.ID, err)
+			}
+			readBack, err := decryptRuntimeSecret(strings.TrimSpace(stored.WebhookURL))
+			if err != nil || readBack != raw {
+				return fmt.Errorf("encrypted webhook URL %d database read-back failed", row.ID)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func SetRuntimeDiscordBotToken(db *gorm.DB, token string) error {
 	token = strings.TrimSpace(token)
 	if token == "" {

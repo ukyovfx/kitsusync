@@ -6,6 +6,7 @@ import (
 	"app/src/utils/config"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -625,6 +626,10 @@ func DeleteMessage(webhookURL, messageID, threadID string) bool {
 	if webhookURL == "" || messageID == "" {
 		return false
 	}
+	if err := validateDiscordWebhookURL(webhookURL); err != nil {
+		slog.Warn("DeleteMessage: rejected invalid webhook URL", "error_class", "invalid_webhook_url")
+		return false
+	}
 	deleteURL := fmt.Sprintf("%s/messages/%s", webhookURL, messageID)
 	if threadID != "" {
 		deleteURL += "?thread_id=" + url.QueryEscape(threadID)
@@ -656,6 +661,10 @@ func DeleteMessage(webhookURL, messageID, threadID string) bool {
 // down to the still-waiting tasks and deleted once none remain.
 func EditMessage(webhookURL, messageID, threadID string, payload Payload) bool {
 	if webhookURL == "" || messageID == "" {
+		return false
+	}
+	if err := validateDiscordWebhookURL(webhookURL); err != nil {
+		slog.Warn("EditMessage: rejected invalid webhook URL", "error_class", "invalid_webhook_url")
 		return false
 	}
 	editURL := fmt.Sprintf("%s/messages/%s", webhookURL, messageID)
@@ -723,6 +732,10 @@ func sendMessageOnce(body []byte, reqURL string) (respBody []byte, statusCode in
 // 429 Rate Limit のみ自動リトライ（最大3回）する。POST の transport
 // error と 5xx は Discord が受理した可能性があるため再送しない。
 func SendMessage(payload Payload, webhookURL, threadID, threadName string) SendResult {
+	if err := validateDiscordWebhookURL(webhookURL); err != nil {
+		slog.Warn("SendMessage: rejected invalid webhook URL", "error_class", "invalid_webhook_url")
+		return SendResult{FailureCategory: "invalid_webhook_url"}
+	}
 	// URL 組み立て
 	reqURL := webhookURL + "?wait=true"
 	if threadID != "" {
@@ -849,6 +862,55 @@ func SetDiscordBotAPIBase(base string) string {
 	previous := discordBotAPI
 	discordBotAPI = strings.TrimSpace(base)
 	return previous
+}
+
+var discordWebhookTestBase string
+
+// SetDiscordWebhookTestBase overrides the allowed webhook URL base (scheme+host)
+// for tests pointing at an httptest server, and returns the previous value.
+// Test hook only.
+func SetDiscordWebhookTestBase(base string) string {
+	previous := discordWebhookTestBase
+	discordWebhookTestBase = strings.TrimSpace(base)
+	return previous
+}
+
+var discordWebhookPathRegexp = regexp.MustCompile(`^/api/webhooks/[0-9]+/[^/]+$`)
+
+func validateDiscordWebhookURL(raw string) error {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return errors.New("webhook URL is empty")
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return fmt.Errorf("invalid webhook URL: %w", err)
+	}
+	if discordWebhookTestBase != "" {
+		testURL, testErr := url.Parse(discordWebhookTestBase)
+		if testErr == nil && testURL.Scheme != "" && testURL.Host != "" &&
+			strings.EqualFold(parsed.Scheme, testURL.Scheme) &&
+			strings.EqualFold(parsed.Host, testURL.Host) {
+			return nil
+		}
+	}
+	if !strings.EqualFold(parsed.Scheme, "https") {
+		return errors.New("webhook URL must use https")
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host != "discord.com" && host != "discordapp.com" {
+		return fmt.Errorf("untrusted webhook host %q", host)
+	}
+	if parsed.Port() != "" {
+		return errors.New("webhook URL must not specify a non-standard port")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return errors.New("webhook URL must not contain userinfo, query, or fragment")
+	}
+	if !discordWebhookPathRegexp.MatchString(parsed.Path) {
+		return errors.New("webhook URL path must match /api/webhooks/<id>/<token>")
+	}
+	return nil
 }
 
 // ResetDMChannelCache drops every cached DM channel. Test hook only.

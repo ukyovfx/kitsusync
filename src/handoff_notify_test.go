@@ -371,3 +371,35 @@ func TestHandoffImmediateRule(t *testing.T) {
 		}
 	}
 }
+
+func TestHandoffCardLineMaskedLink(t *testing.T) {
+	event := model.HandoffEvent{
+		ProductionID:       "p1",
+		EntityKind:         "shot",
+		EntityName:         "sq010_sh001",
+		ProductName:        "anim",
+		ProductVersion:     "v01",
+		SourceAuthorName:   "Taro",
+		SourceTaskTypeName: "Animation",
+		NotifyTaskID:       "task-comp-1",
+	}
+
+	plain := handoffCardLine(event, "", "ja")
+	wantPlain := "sq010_sh001: anim v01 ← Taro の Animation"
+	if plain != wantPlain {
+		t.Fatalf("plain line = %q, want %q", plain, wantPlain)
+	}
+
+	linked := handoffCardLine(event, "https://kitsu.example", "ja")
+	wantURL := "https://kitsu.example/productions/p1/shots/tasks/task-comp-1"
+	wantLinked := "[" + wantPlain + "](" + wantURL + ")"
+	if linked != wantLinked {
+		t.Fatalf("linked line = %q, want %q", linked, wantLinked)
+	}
+
+	enLinked := handoffCardLine(event, "https://kitsu.example", "en")
+	wantEN := "[sq010_sh001: anim v01 ← from Taro's Animation](" + wantURL + ")"
+	if enLinked != wantEN {
+		t.Fatalf("en linked line = %q, want %q", enLinked, wantEN)
+	}
+}
