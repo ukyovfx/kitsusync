@@ -18,8 +18,6 @@ KitsuSync is a Kitsu x Discord pipeline bridge for VFX and animation teams. It p
 
 ![Connections](docs/images/screenshot-connections.png)
 
-![Handoff wiring](docs/images/screenshot-wiring.png)
-
 ## Why This Repo Exists
 
 KitsuSync helps teams that already track production in Kitsu but need Discord to act like an operator-friendly notification surface instead of a manual status relay.
