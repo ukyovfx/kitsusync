@@ -414,6 +414,8 @@ func renderStudioRoutesSection(db *gorm.DB, lang string, r *http.Request) string
 		`<input type="hidden" name="action" value="save_studio_routes">` +
 		`<section class="flat-section" id="studio-routes">` +
 		`<p class="field-help">` + esc(t(lang, "タスクが完了したとき、同じショット/アセットの次工程へ「進めていい」と伝える配線です。", "Wiring that tells the next task types on the same shot or asset they may proceed when a task finishes.")) + `</p>` +
+		`<p class="field-help" data-kitsu-automation-dependency>` + esc(t(lang, "Kitsu側の前提: Kitsuの Status Automations を設定し、上流のタスクタイプほど優先度（Priority）の数字を小さくしてください。", "Kitsu prerequisite: Status Automations must be configured in Kitsu with lower priority numbers on upstream task types than downstream.")) + `</p>` +
+		renderStudioWiringApplicationState(db, lang) +
 		rows.String() +
 		`<div class="button-row">` +
 		`<a class="btn-ghost" data-route-back href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "接続設定へ戻る", "Back to Connections")) + `</a>` +
@@ -422,6 +424,53 @@ func renderStudioRoutesSection(db *gorm.DB, lang string, r *http.Request) string
 		`<button type="button" class="btn-ghost" data-route-edit-cancel>` + esc(t(lang, "キャンセル", "Cancel")) + `</button>` +
 		`<button type="submit" class="btn">` + esc(t(lang, "保存", "Save")) + `</button>` +
 		`</span></div></section></form>` + studioRoutesEditorScript
+}
+
+// renderStudioWiringApplicationState derives read-only studio default wiring
+// and per-production override status from existing route rows.
+func renderStudioWiringApplicationState(db *gorm.DB, lang string) string {
+	if db == nil {
+		return ""
+	}
+	studioRoutes, err := model.LoadStudioTaskRoutes(db)
+	if err != nil {
+		return ""
+	}
+	wiredCount := 0
+	for _, route := range studioRoutes {
+		if len(model.SplitHandoffNotifyIDs(route.NotifyTaskTypeIDs)) > 0 {
+			wiredCount++
+		}
+	}
+	studioState := t(lang, "スタジオ共通配線: 未設定", "Studio default wiring: not configured")
+	if wiredCount > 0 {
+		studioState = fmt.Sprintf(t(lang, "スタジオ共通配線: %d 件の工程に設定済み", "Studio default wiring: configured (%d task types)"), wiredCount)
+	}
+	var connectedCount int
+	var overriddenNames []string
+	for _, project := range model.ListProjects(db) {
+		if project.ValidationOnly || strings.TrimSpace(project.KitsuProjectID) == "" {
+			continue
+		}
+		connectedCount++
+		overrides, err := model.LoadProductionTaskRoutes(db, project.KitsuProjectID)
+		if err == nil && len(overrides) > 0 {
+			name := strings.TrimSpace(project.Name)
+			if name == "" {
+				name = project.KitsuProjectID
+			}
+			overriddenNames = append(overriddenNames, name)
+		}
+	}
+	prodState := t(lang, "接続済みプロダクションはまだありません。", "No connected Productions yet.")
+	if connectedCount > 0 {
+		if len(overriddenNames) == 0 {
+			prodState = fmt.Sprintf(t(lang, "全 %d 件のプロダクションでスタジオ共通配線を継承中", "All %d connected Productions inherit the studio default"), connectedCount)
+		} else {
+			prodState = fmt.Sprintf(t(lang, "%d / %d 件のプロダクションで個別上書きあり: %s", "Per-production overrides in %d of %d Productions: %s"), len(overriddenNames), connectedCount, strings.Join(overriddenNames, ", "))
+		}
+	}
+	return `<p class="field-help" data-studio-wiring-state style="padding-bottom:8px;border-bottom:1px solid var(--border-subtle,rgba(255,255,255,0.08));">` + esc(studioState+t(lang, " ・ ", " · ")+prodState) + `</p>`
 }
 
 // studioRoutesEditorScript drives the wiring editor's single page-level edit
