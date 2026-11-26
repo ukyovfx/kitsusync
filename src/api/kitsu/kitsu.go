@@ -602,10 +602,14 @@ func GetProjectTaskTypeSupervisorsWithCredentials(baseURL, token, projectID, tas
 
 // GetDepartmentSupervisorsForProductionTeamWithCredentials resolves active,
 // non-archived, non-bot members in the supplied live Production team whose Kitsu
-// position is Supervisor. The caller can reuse a team read already made for the
-// same page request.
+// position is Supervisor and whose Departments include departmentID. An empty
+// departmentID resolves to nobody. The caller can reuse a team read already
+// made for the same page request.
 func GetDepartmentSupervisorsForProductionTeamWithCredentials(baseURL, token, departmentID string, team []Person) ([]Person, error) {
-	_ = departmentID
+	departmentID = strings.TrimSpace(departmentID)
+	if departmentID == "" {
+		return []Person{}, nil
+	}
 	teamByID := make(map[string]Person, len(team))
 	for _, person := range team {
 		id := strings.TrimSpace(person.ID)
@@ -645,6 +649,9 @@ func GetDepartmentSupervisorsForProductionTeamWithCredentials(baseURL, token, de
 		if !IsSupervisorPosition(teamPerson) {
 			return nil, fmt.Errorf("Kitsu person %q is not a Supervisor", personID)
 		}
+		if !personHasDepartment(person, departmentID) {
+			continue
+		}
 		if strings.TrimSpace(person.FullName) == "" {
 			person.FullName = strings.TrimSpace(person.FirstName + " " + person.LastName)
 		}
@@ -662,4 +669,13 @@ func GetDepartmentSupervisorsForProductionTeamWithCredentials(baseURL, token, de
 		result = append(result, person)
 	}
 	return result, nil
+}
+
+func personHasDepartment(person Person, departmentID string) bool {
+	for _, dept := range person.Departments {
+		if strings.TrimSpace(dept) == departmentID {
+			return true
+		}
+	}
+	return false
 }
