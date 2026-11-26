@@ -91,6 +91,11 @@ func isHTTPSRequest(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
 	}
+	if publicOrigin := configuredPublicOriginURL(); publicOrigin != nil &&
+		publicOrigin.Scheme == "https" &&
+		strings.EqualFold(strings.TrimSpace(r.Host), publicOrigin.Host) {
+		return true
+	}
 	if !requestFromTrustedProxy(r) {
 		return false
 	}
@@ -354,13 +359,14 @@ func CSRFProtection(next http.Handler) http.Handler {
 			return
 		}
 		effective := requestOrigin(r)
+		publicOrigin := configuredPublicOrigin()
 		if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
-			if !sameOrigin(origin, effective) {
+			if !sameOrigin(origin, effective) && (publicOrigin == "" || !sameOrigin(origin, publicOrigin)) {
 				http.Error(w, "origin mismatch", http.StatusForbidden)
 				return
 			}
 		} else if referer := strings.TrimSpace(r.Header.Get("Referer")); referer != "" {
-			if !sameOriginReferer(referer, effective) {
+			if !sameOriginReferer(referer, effective) && (publicOrigin == "" || !sameOriginReferer(referer, publicOrigin)) {
 				http.Error(w, "referer mismatch", http.StatusForbidden)
 				return
 			}
@@ -400,6 +406,42 @@ func requestOrigin(r *http.Request) string {
 		scheme = "https"
 	}
 	return scheme + "://" + r.Host
+}
+
+// configuredPublicOriginURL returns the operator-configured public origin
+// (app.external_url, falling back to app.observed_public_url) normalized to
+// scheme://host[:port], or nil when unset or invalid.
+func configuredPublicOriginURL() *url.URL {
+	sessionMu.Lock()
+	db := sessionStoreDB
+	sessionMu.Unlock()
+	if db == nil {
+		return nil
+	}
+	for _, raw := range []string{AppExternalURL(db), AppObservedPublicURL(db)} {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		parsed, err := url.Parse(raw)
+		if err != nil || parsed.Host == "" || parsed.User != nil {
+			continue
+		}
+		scheme := strings.ToLower(parsed.Scheme)
+		if scheme != "http" && scheme != "https" {
+			continue
+		}
+		return &url.URL{Scheme: scheme, Host: parsed.Host}
+	}
+	return nil
+}
+
+func configuredPublicOrigin() string {
+	u := configuredPublicOriginURL()
+	if u == nil {
+		return ""
+	}
+	return u.String()
 }
 
 func sameOrigin(candidate, expected string) bool {

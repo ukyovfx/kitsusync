@@ -911,3 +911,138 @@ func TestNewSessionTokenRecentAuthRequiresExactBotEditURL(t *testing.T) {
 		})
 	}
 }
+
+func TestCSRFProtectionAllowsConfiguredExternalURLThroughNonLoopbackProxy(t *testing.T) {
+	newTestDB := func(t *testing.T) *gorm.DB {
+		t.Helper()
+		db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "csrf.db")), &gorm.Config{})
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		if err := db.AutoMigrate(&model.Setting{}, &model.AdminSession{}); err != nil {
+			t.Fatalf("migrate db: %v", err)
+		}
+		ConfigureSessionStore(db)
+		t.Cleanup(resetSessions)
+		return db
+	}
+
+	t.Run("configured external_url allows matching origin from bridge gateway", func(t *testing.T) {
+		db := newTestDB(t)
+		if err := model.SetSettingWithError(db, AppExternalURLSettingKey, "https://kitsusync.rigoo.jp/"); err != nil {
+			t.Fatalf("set external url: %v", err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "http://kitsusync.rigoo.jp/bot/login", strings.NewReader("email=a&password=b"))
+		req.RemoteAddr = "172.17.0.1:40000"
+		req.Host = "kitsusync.rigoo.jp"
+		req.Header.Set("X-Forwarded-Proto", "https")
+		req.Header.Set("Origin", "https://kitsusync.rigoo.jp")
+
+		rr := httptest.NewRecorder()
+		called := false
+		CSRFProtection(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			called = true
+			w.WriteHeader(http.StatusOK)
+		})).ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK || !called {
+			t.Fatalf("expected configured public origin to pass CSRF, status=%d called=%v body=%q", rr.Code, called, rr.Body.String())
+		}
+	})
+
+	t.Run("evil origin still rejected when external_url is configured", func(t *testing.T) {
+		db := newTestDB(t)
+		if err := model.SetSettingWithError(db, AppExternalURLSettingKey, "https://kitsusync.rigoo.jp"); err != nil {
+			t.Fatalf("set external url: %v", err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "http://kitsusync.rigoo.jp/bot/login", strings.NewReader("email=a&password=b"))
+		req.RemoteAddr = "172.17.0.1:40000"
+		req.Host = "kitsusync.rigoo.jp"
+		req.Header.Set("X-Forwarded-Proto", "https")
+		req.Header.Set("Origin", "https://evil.example")
+
+		rr := httptest.NewRecorder()
+		called := false
+		CSRFProtection(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			called = true
+			w.WriteHeader(http.StatusOK)
+		})).ServeHTTP(rr, req)
+		if rr.Code != http.StatusForbidden || called {
+			t.Fatalf("expected evil origin to return 403, status=%d called=%v", rr.Code, called)
+		}
+	})
+
+	t.Run("configured external_url allows matching referer fallback", func(t *testing.T) {
+		db := newTestDB(t)
+		if err := model.SetSettingWithError(db, AppExternalURLSettingKey, "https://kitsusync.rigoo.jp"); err != nil {
+			t.Fatalf("set external url: %v", err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "http://kitsusync.rigoo.jp/bot/login", strings.NewReader("email=a&password=b"))
+		req.RemoteAddr = "172.17.0.1:40000"
+		req.Host = "kitsusync.rigoo.jp"
+		req.Header.Set("X-Forwarded-Proto", "https")
+		req.Header.Set("Referer", "https://kitsusync.rigoo.jp/bot/login")
+
+		rr := httptest.NewRecorder()
+		called := false
+		CSRFProtection(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			called = true
+			w.WriteHeader(http.StatusOK)
+		})).ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK || !called {
+			t.Fatalf("expected matching referer to pass CSRF, status=%d called=%v", rr.Code, called)
+		}
+	})
+
+	t.Run("falls back to observed_public_url when external_url is unset", func(t *testing.T) {
+		db := newTestDB(t)
+		if err := model.SetSettingWithError(db, AppObservedPublicURLSettingKey, "https://kitsusync.rigoo.jp"); err != nil {
+			t.Fatalf("set observed url: %v", err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "http://kitsusync.rigoo.jp/bot/login", strings.NewReader("email=a&password=b"))
+		req.RemoteAddr = "172.17.0.1:40000"
+		req.Host = "kitsusync.rigoo.jp"
+		req.Header.Set("X-Forwarded-Proto", "https")
+		req.Header.Set("Origin", "https://kitsusync.rigoo.jp")
+
+		rr := httptest.NewRecorder()
+		called := false
+		CSRFProtection(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			called = true
+			w.WriteHeader(http.StatusOK)
+		})).ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK || !called {
+			t.Fatalf("expected observed_public_url fallback to pass CSRF, status=%d called=%v", rr.Code, called)
+		}
+	})
+}
+
+func TestSessionCookieUsesSecureForConfiguredPublicHTTPSOrigin(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "cookie.db")), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.AutoMigrate(&model.Setting{}, &model.AdminSession{}); err != nil {
+		t.Fatalf("migrate db: %v", err)
+	}
+	ConfigureSessionStore(db)
+	t.Cleanup(resetSessions)
+
+	if err := model.SetSettingWithError(db, AppExternalURLSettingKey, "https://kitsusync.rigoo.jp/"); err != nil {
+		t.Fatalf("set external url: %v", err)
+	}
+
+	publicReq := httptest.NewRequest(http.MethodPost, "http://kitsusync.rigoo.jp/bot/login", nil)
+	publicReq.RemoteAddr = "172.17.0.1:40000"
+	publicReq.Host = "kitsusync.rigoo.jp"
+	publicReq.Header.Set("X-Forwarded-Proto", "https")
+	if !sessionCookie(publicReq, "token", int((15 * time.Minute).Seconds())).Secure {
+		t.Fatal("expected Secure cookie when Host matches configured https public origin")
+	}
+
+	localReq := httptest.NewRequest(http.MethodPost, "http://localhost:8090/bot/login", nil)
+	localReq.RemoteAddr = "172.17.0.1:40000"
+	localReq.Host = "localhost:8090"
+	if sessionCookie(localReq, "token", int((15 * time.Minute).Seconds())).Secure {
+		t.Fatal("expected non-Secure cookie for local HTTP Host even when external_url is https")
+	}
+}
