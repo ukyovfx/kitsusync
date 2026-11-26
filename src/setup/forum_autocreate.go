@@ -635,7 +635,7 @@ func checkForumPermissionIssues(productionID, productionName string, settings mo
 		seen[route.ForumChannelID] = struct{}{}
 		bits, err := forumPermissionGetter(settings.Config.GuildID, route.ForumChannelID, botToken)
 		if err != nil {
-			slog.Warn("Forum permission check failed", "production_id", productionID, "task_type", safeLogField(route.TaskTypeName), "err", safeLogField(err.Error()))
+			slog.Warn("Forum permission check failed", "production_id", safeLogField(productionID), "task_type", safeLogField(route.TaskTypeName), "err", safeLogField(err.Error()))
 			problems = append(problems, ForumPermissionProblem{
 				ProductionID:   productionID,
 				ProductionName: productionName,
