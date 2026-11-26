@@ -469,7 +469,7 @@ func TestNotificationHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botTok
 			Message: discord.ForumFirstMessage(payload),
 		})
 		if err != nil {
-			slog.Warn("Test notification send failed", "project_id", projectID, "error_class", connectionErrorClass(err), "err", err)
+			slog.Warn("Test notification send failed", "project_id", safeLogField(projectID), "error_class", connectionErrorClass(err), "err", safeLogField(err.Error()))
 			errStr := "test notification failed to send (" + connectionErrorClass(err) + ")"
 			json.NewEncoder(w).Encode(TestNotificationResponse{ProjectID: projectID, Error: &errStr})
 			return

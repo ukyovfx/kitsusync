@@ -215,7 +215,7 @@ func ValidateKitsuBotToken(db *gorm.DB, hostname, token string, includeComments 
 			result.CommentsDegraded = true
 			result.CommentsFailure = read
 			slog.Warn("Kitsu Bot token comments read degraded",
-				"endpoint", read.Endpoint,
+				"endpoint", safeLogField(read.Endpoint),
 				"status", read.StatusCode,
 				"error_class", read.ErrorClass,
 			)
