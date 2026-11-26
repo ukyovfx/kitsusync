@@ -678,7 +678,7 @@ func reviewerBrowserTeam() []kitsu.Person {
 	return []kitsu.Person{
 		{ID: "person-promotion", FullName: "Project Supervisor", Email: "promotion@synthetic.invalid", Active: true, Role: "artist", ProjectRole: "supervisor", Position: "Supervisor", Departments: []string{"dept-comp"}},
 		{ID: "person-no-department", FullName: "Departmentless Supervisor", Email: "no-dept@synthetic.invalid", Active: true, Role: "supervisor"},
-		{ID: "person-wrong-department", FullName: "Wrong Department Supervisor", Email: "wrong-dept@synthetic.invalid", Active: true, Role: "supervisor"},
+		{ID: "person-wrong-department", FullName: "Wrong Department Supervisor", Email: "wrong-dept@synthetic.invalid", Active: true, Role: "supervisor", Position: "Supervisor"},
 		{ID: "person-artist", FullName: "Synthetic Artist", Email: "artist@synthetic.invalid", Active: true, Role: "artist"},
 		{ID: "person-manager", FullName: "Production Manager", Email: "manager@synthetic.invalid", Active: true, Role: "manager"},
 		{ID: "person-global-admin", FullName: "Global Admin", Email: "admin@synthetic.invalid", Active: true, Role: "admin", ProjectRole: "supervisor"},

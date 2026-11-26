@@ -172,10 +172,10 @@ func TestGetProjectTaskTypeSupervisorsWithCredentials(t *testing.T) {
 		wantErr      bool
 	}{
 		{
-			name:        "Production team position=Supervisor eligibility does not use task assignments",
+			name:        "Supervisor in task type department is selected without task assignments",
 			taskTypes:   `[{"id":"tt-1","name":"Animation","department_id":"dept-1"}]`,
 			projectTeam: `[{"id":"p-1","active":true,"is_bot":false,"role":"artist","position":"Supervisor"}]`,
-			details:     map[string]string{"p-1": `{"id":"p-1","first_name":"Sam","last_name":"One","email":"sam@example.test","role":"artist","position":"Supervisor"}`},
+			details:     map[string]string{"p-1": `{"id":"p-1","first_name":"Sam","last_name":"One","email":"sam@example.test","role":"artist","position":"Supervisor","departments":["dept-1"]}`},
 			wantIDs:     []string{"p-1"},
 		},
 		{
@@ -183,8 +183,8 @@ func TestGetProjectTaskTypeSupervisorsWithCredentials(t *testing.T) {
 			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
 			projectTeam: `[{"id":"p-z","active":true,"role":"artist","position":"Supervisor"},{"id":"p-a","active":true,"role":"manager","position":" supervisor "}]`,
 			details: map[string]string{
-				"p-z": `{"id":"p-z","full_name":"Zed","email":"zed@example.test","role":"artist","position":"Supervisor"}`,
-				"p-a": `{"id":"p-a","full_name":"Amy","email":"amy@example.test","role":"manager","position":" supervisor "}`,
+				"p-z": `{"id":"p-z","full_name":"Zed","email":"zed@example.test","role":"artist","position":"Supervisor","departments":["dept-1"]}`,
+				"p-a": `{"id":"p-a","full_name":"Amy","email":"amy@example.test","role":"manager","position":" supervisor ","departments":["dept-2","dept-1"]}`,
 			},
 			wantIDs: []string{"p-a", "p-z"},
 		},
@@ -192,29 +192,27 @@ func TestGetProjectTaskTypeSupervisorsWithCredentials(t *testing.T) {
 			name:        "supervisor outside Production team is excluded",
 			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
 			projectTeam: `[{"id":"p-2","active":true,"role":"artist","position":"Lead"}]`,
-			details:     map[string]string{"p-1": `{"id":"p-1","full_name":"Sam One","email":"sam@example.test","role":"supervisor","position":"Supervisor"}`},
+			details:     map[string]string{"p-1": `{"id":"p-1","full_name":"Sam One","email":"sam@example.test","role":"supervisor","position":"Supervisor","departments":["dept-1"]}`},
 		},
 		{
-			name:        "supervisor with no Department or another Department is still included",
+			name:        "supervisor with no Department or only other Departments is excluded",
 			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
 			projectTeam: `[{"id":"p-1","active":true,"role":"manager","position":"Supervisor"},{"id":"p-2","active":true,"role":"artist","position":"Supervisor"}]`,
 			details: map[string]string{
 				"p-1": `{"id":"p-1","full_name":"Sam One","email":"sam@example.test","departments":[]}`,
 				"p-2": `{"id":"p-2","full_name":"Pat Two","email":"pat@example.test","departments":["dept-2"]}`,
 			},
-			wantIDs: []string{"p-1", "p-2"},
 		},
 		{
-			name:        "non-supervisor position is excluded",
+			name:        "non-supervisor position in the department is excluded",
 			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
-			projectTeam: `[{"id":"p-1","active":true,"role":"artist","position":"Artist"}]`,
+			projectTeam: `[{"id":"p-1","active":true,"role":"artist","position":"Artist","departments":["dept-1"]}]`,
 		},
 		{
-			name:        "task type without department still resolves position=Supervisor team members",
+			name:        "task type without department returns empty result",
 			taskTypes:   `[{"id":"tt-1","department_id":""}]`,
 			projectTeam: `[{"id":"p-1","active":true,"role":"manager","position":"Supervisor"}]`,
-			details:     map[string]string{"p-1": `{"id":"p-1","full_name":"Sam One","email":"sam@example.test","role":"manager","position":"Supervisor"}`},
-			wantIDs:     []string{"p-1"},
+			details:     map[string]string{"p-1": `{"id":"p-1","full_name":"Sam One","email":"sam@example.test","role":"manager","position":"Supervisor","departments":["dept-1"]}`},
 		},
 		{
 			name:      "unknown task type ID fails closed",
@@ -232,7 +230,7 @@ func TestGetProjectTaskTypeSupervisorsWithCredentials(t *testing.T) {
 			name:        "duplicate person IDs are fetched and returned once",
 			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
 			projectTeam: `[{"id":"p-1","active":true,"role":"artist","position":"Supervisor"},{"id":"p-1","active":true,"role":"artist","position":"Supervisor"}]`,
-			details:     map[string]string{"p-1": `{"id":"p-1","full_name":"Sam One","email":"sam@example.test","role":"artist","position":"Supervisor"}`},
+			details:     map[string]string{"p-1": `{"id":"p-1","full_name":"Sam One","email":"sam@example.test","role":"artist","position":"Supervisor","departments":["dept-1"]}`},
 			wantIDs:     []string{"p-1"},
 		},
 		{
@@ -246,17 +244,17 @@ func TestGetProjectTaskTypeSupervisorsWithCredentials(t *testing.T) {
 			projectTeam: `[{"id":"p-1","active":true,"role":"supervisor","project_role":"supervisor","position":"Lead"}]`,
 		},
 		{
-			name:        "role=manager with position=Supervisor is included",
+			name:        "role=manager with position=Supervisor in department is included",
 			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
 			projectTeam: `[{"id":"p-1","active":true,"role":"manager","position":"Supervisor"}]`,
-			details:     map[string]string{"p-1": `{"id":"p-1","full_name":"Sam One","email":"sam@example.test","role":"manager","position":"Supervisor"}`},
+			details:     map[string]string{"p-1": `{"id":"p-1","full_name":"Sam One","email":"sam@example.test","role":"manager","position":"Supervisor","departments":["dept-1"]}`},
 			wantIDs:     []string{"p-1"},
 		},
 		{
-			name:        "Position grants Supervisor eligibility; role alone does not",
+			name:        "Position and department grant Supervisor eligibility; role alone does not",
 			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
 			projectTeam: `[{"id":"p-1","active":true,"role":"artist","position":"Supervisor"},{"id":"p-2","active":true,"role":"supervisor","position":"Lead"}]`,
-			details:     map[string]string{"p-1": `{"id":"p-1","full_name":"Sam One","email":"sam@example.test","role":"artist","position":"Supervisor"}`},
+			details:     map[string]string{"p-1": `{"id":"p-1","full_name":"Sam One","email":"sam@example.test","role":"artist","position":"Supervisor","departments":["dept-1"]}`},
 			wantIDs:     []string{"p-1"},
 		},
 		{
