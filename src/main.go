@@ -1134,6 +1134,10 @@ func main() {
 	discord.KitsuPublicURLResolver = func() string {
 		return setup.PublicKitsuURL(db)
 	}
+	setup.SetEffectiveRuntimeConfig(setup.EffectiveRuntimeConfig{
+		IgnoreMessagesDaysOld: conf.IgnoreMessagesDaysOld,
+		TplPreset:             conf.TplPreset,
+	})
 
 	// Forum-mode Productions are validated once at startup: a wrong forum or tag
 	// ID would otherwise only surface as a failed post much later.
@@ -1152,7 +1156,10 @@ func main() {
 				guildID = model.ResolveProjectGuildID(db, project.KitsuProjectID, fallbackGuildID)
 			}
 			problems := forum.ValidateForumTargets(db, project.KitsuProjectID, guildID, setup.ForumChannelLister(), botToken)
-			problems = append(problems, setup.CheckForumPermissions(settings, botToken)...)
+			if strings.TrimSpace(settings.Config.GuildID) == "" {
+				settings.Config.GuildID = guildID
+			}
+			problems = append(problems, setup.RefreshForumPermissionProblems(db, project.KitsuProjectID, project.Name, settings, botToken)...)
 			for _, problem := range problems {
 				slog.Warn("Forum target validation failed: "+problem, "event", "forum_target_validation_failed", "production_id", project.KitsuProjectID)
 			}
@@ -1200,6 +1207,7 @@ func main() {
 			)
 			if validation.Compatible() {
 				setup.RecordKitsuRuntimeAuthMode(db, "bot_token", "")
+				setup.RecordKitsuCommentsVerificationState(db, validation)
 				return runtime.authenticateToken(connection, token)
 			}
 			setup.RecordKitsuRuntimeAuthMode(db, "bot_token_failed", validation.Classification)

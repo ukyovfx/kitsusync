@@ -270,6 +270,10 @@ func ForumSettingsHandler(db *gorm.DB, discordSettings func() (botToken, fallbac
 				fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, &settings, err))
 				return
 			}
+			if strings.TrimSpace(settings.Config.GuildID) == "" {
+				settings.Config.GuildID = guildID
+			}
+			RefreshForumPermissionProblems(db, projectID, project.Name, settings, botToken)
 			http.Redirect(w, r, withLang("/bot/admin/forum?project="+url.QueryEscape(projectID), r)+"&msg=saved", http.StatusSeeOther)
 			return
 		}

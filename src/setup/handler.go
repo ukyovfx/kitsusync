@@ -225,7 +225,7 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 			}
 			logs, err := DeleteProject(pid, botToken, db)
 			if err != nil {
-				logs = append(logs, "cleanup warning: "+err.Error())
+				logs = append(logs, "cleanup warning: "+connectionErrorClass(err))
 				slog.Error("Project delete completed with cleanup errors", "kitsuProjectID", pid, "projectName", projectName, "err", err)
 			}
 			fmt.Fprint(w, renderDeleteResult(lang, projectName, logs))

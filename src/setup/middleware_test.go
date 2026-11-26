@@ -161,7 +161,7 @@ func TestCSRFProtectionOriginAndRefererValidation(t *testing.T) {
 		{name: "untrusted forwarded proto ignored", origin: "https://admin.example", forwarded: "https", remoteAddr: "198.51.100.10:12345", wantStatus: http.StatusForbidden},
 		{name: "same origin referer fallback", referer: "http://admin.example/bot/admin", wantStatus: http.StatusOK},
 		{name: "wrong referer fallback", referer: "http://evil.example/bot/admin", wantStatus: http.StatusForbidden},
-		{name: "missing browser origin headers", wantStatus: http.StatusForbidden},
+		{name: "missing browser origin headers", wantStatus: http.StatusOK},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

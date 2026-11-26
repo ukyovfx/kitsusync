@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -468,7 +469,8 @@ func TestNotificationHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botTok
 			Message: discord.ForumFirstMessage(payload),
 		})
 		if err != nil {
-			errStr := "test notification failed to send: " + err.Error()
+			slog.Warn("Test notification send failed", "project_id", safeLogField(projectID), "error_class", connectionErrorClass(err), "err", safeLogField(err.Error()))
+			errStr := "test notification failed to send (" + connectionErrorClass(err) + ")"
 			json.NewEncoder(w).Encode(TestNotificationResponse{ProjectID: projectID, Error: &errStr})
 			return
 		}
@@ -718,7 +720,8 @@ func checkDiscordStatusReadOnly(botToken, guildID string) (info DiscordStatusInf
 	var botUserID string
 	body, status, err := botDo("GET", discordAPI+"/users/@me", nil, botToken)
 	if err != nil {
-		errStr := "Discord API unreachable: " + err.Error()
+		slog.Warn("Discord API status check failed", "error_class", connectionErrorClass(err), "err", err)
+		errStr := "Discord API unreachable (" + connectionErrorClass(err) + ")"
 		info.Error = &errStr
 		return info
 	}

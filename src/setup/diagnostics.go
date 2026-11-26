@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -186,10 +187,11 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 		pingURL := strings.TrimRight(kitsuHost, "/") + "/api/"
 		resp, err := client.Get(pingURL)
 		if err != nil {
+			slog.Warn("Diagnostics Kitsu reachability check failed", "error_class", connectionErrorClass(err), "err", err)
 			checks = append(checks, diagCheck{
 				Label:  "Kitsu server reachable",
 				Status: "fail",
-				Detail: "HTTP request failed: " + err.Error(),
+				Detail: "HTTP request failed (" + connectionErrorClass(err) + ").",
 				Fix:    t(lang, "Bot設定の Kitsu hostname を確認し、Kitsu runtime が起動しているか見直してください。", "Confirm the Kitsu hostname in Bot Settings and verify that the Kitsu runtime is reachable."),
 			})
 		} else {
@@ -233,10 +235,11 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 	if !botTokenMissing {
 		body, status, err := botDo("GET", discordAPI+"/users/@me", nil, botToken)
 		if err != nil {
+			slog.Warn("Diagnostics Discord bot check failed", "error_class", connectionErrorClass(err), "err", err)
 			checks = append(checks, diagCheck{
 				Label:  t(lang, "Discord Botの有効性", "Discord bot valid"),
 				Status: "fail",
-				Detail: "Request failed: " + err.Error(),
+				Detail: "Request failed (" + connectionErrorClass(err) + ").",
 				Fix:    "Check network connectivity to discord.com.",
 			})
 		} else if status == 200 {
@@ -299,10 +302,11 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 		} else {
 			_, status, err := botDo("GET", discordAPI+"/guilds/"+url.PathEscape(guildID), nil, botToken)
 			if err != nil {
+				slog.Warn("Diagnostics Discord guild check failed", "error_class", connectionErrorClass(err), "err", err)
 				checks = append(checks, diagCheck{
 					Label:  "Discord guild accessible",
 					Status: "fail",
-					Detail: "Request failed: " + err.Error(),
+					Detail: "Request failed (" + connectionErrorClass(err) + ").",
 				})
 			} else if status == 200 {
 				checks = append(checks, diagCheck{
@@ -334,10 +338,11 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 
 			_, status, err = botDo("GET", discordAPI+"/guilds/"+url.PathEscape(guildID)+"/channels", nil, botToken)
 			if err != nil {
+				slog.Warn("Diagnostics Discord channel list check failed", "error_class", connectionErrorClass(err), "err", err)
 				checks = append(checks, diagCheck{
 					Label:  "Discord permissions (channels)",
 					Status: "warn",
-					Detail: "Could not check: " + err.Error(),
+					Detail: "Could not check (" + connectionErrorClass(err) + ").",
 				})
 			} else if status == 200 {
 				checks = append(checks, diagCheck{
@@ -377,10 +382,11 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 
 	var count int64
 	if err := db.Raw("SELECT COUNT(*) FROM sqlite_master").Scan(&count).Error; err != nil {
+		slog.Warn("Diagnostics SQLite check failed", "err", err)
 		checks = append(checks, diagCheck{
 			Label:  "Database (SQLite)",
 			Status: "fail",
-			Detail: "Query failed: " + err.Error(),
+			Detail: "Query failed (database_error).",
 			Fix:    "Check that the data/ volume is mounted and not corrupted.",
 		})
 	} else {

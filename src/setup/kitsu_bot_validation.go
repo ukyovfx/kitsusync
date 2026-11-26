@@ -32,6 +32,7 @@ const (
 	RuntimeKitsuBotNameSettingKey          = "kitsu.runtime_bot_name"
 	RuntimeKitsuTokenValidatedAtSettingKey = "kitsu.runtime_token_validated_at"
 	RuntimeKitsuTokenErrorSettingKey       = "kitsu.runtime_token_error_class"
+	RuntimeKitsuCommentsErrorSettingKey    = "kitsu.comments_error_class"
 )
 
 type BotTokenReadResult struct {
@@ -42,18 +43,24 @@ type BotTokenReadResult struct {
 }
 
 type BotTokenValidationResult struct {
-	Classification string
-	Stage          string
-	Authenticated  bool
-	IdentityID     string
-	IdentityName   string
-	IdentityIsBot  bool
-	Reads          []BotTokenReadResult
-	Failure        BotTokenReadResult
+	Classification   string
+	Stage            string
+	Authenticated    bool
+	IdentityID       string
+	IdentityName     string
+	IdentityIsBot    bool
+	Reads            []BotTokenReadResult
+	Failure          BotTokenReadResult
+	CommentsDegraded bool
+	CommentsFailure  BotTokenReadResult
 }
 
 func (r BotTokenValidationResult) Compatible() bool {
 	return r.Classification == BotTokenFullyCompatible
+}
+
+func (r BotTokenValidationResult) HasCommentsFailure() bool {
+	return r.CommentsDegraded
 }
 
 func recordBotTokenRead(result *BotTokenValidationResult, stage string, read BotTokenReadResult) {
@@ -199,10 +206,20 @@ func ValidateKitsuBotToken(db *gorm.DB, hostname, token string, includeComments 
 		}
 	}
 	if includeComments {
-		// Optional diagnostic read: record its result, but do not reject a token
-		// when comments are permission-restricted or unavailable.
+		// Diagnostic/enrichment read: record its result and flag degraded state
+		// when comments are permission-restricted or unavailable so verification
+		// does not pass silently.
 		_, read = botTokenGET(client, base+"/api/data/comments", token, nil)
 		recordBotTokenRead(&result, "comments", read)
+		if !read.Success {
+			result.CommentsDegraded = true
+			result.CommentsFailure = read
+			slog.Warn("Kitsu Bot token comments read degraded",
+				"endpoint", safeLogField(read.Endpoint),
+				"status", read.StatusCode,
+				"error_class", read.ErrorClass,
+			)
+		}
 	}
 	for _, productionID := range productionIDs {
 		for _, endpoint := range []string{
@@ -360,5 +377,43 @@ func botTokenValidationUserMessageSafe(lang string, result BotTokenValidationRes
 		return t(lang, "Kitsu Bot tokenを確認できませんでした。", "The Kitsu Bot token could not be verified.")
 	default:
 		return t(lang, "Kitsu Bot tokenの検証に失敗しました。", "Kitsu Bot token validation failed.")
+	}
+}
+
+// RecordKitsuCommentsVerificationState persists or clears the degraded
+// comments-read state from Kitsu Bot token verification.
+func RecordKitsuCommentsVerificationState(db *gorm.DB, validation BotTokenValidationResult) {
+	if db == nil {
+		return
+	}
+	if validation.HasCommentsFailure() {
+		errClass := strings.TrimSpace(validation.CommentsFailure.ErrorClass)
+		if errClass == "" {
+			errClass = "unknown_error"
+		}
+		model.SetSetting(db, RuntimeKitsuCommentsErrorSettingKey, errClass)
+		return
+	}
+	if validation.Compatible() {
+		model.DeleteSetting(db, RuntimeKitsuCommentsErrorSettingKey)
+	}
+}
+
+func botTokenCommentsDegradedMessage(lang, errorClass string) string {
+	switch strings.TrimSpace(errorClass) {
+	case "http_401":
+		return t(lang, "Kitsu コメントの読み取り確認に失敗しました（認証エラー: http_401）。コメント通知が動作しない可能性があります。", "Kitsu comment-read verification failed (unauthorized: http_401). Comment notifications may not work.")
+	case "http_403":
+		return t(lang, "Kitsu コメントの読み取り確認に失敗しました（権限不足: http_403）。コメント通知が動作しない可能性があります。", "Kitsu comment-read verification failed (permission denied: http_403). Comment notifications may not work.")
+	case "http_404":
+		return t(lang, "Kitsu コメントの読み取り確認に失敗しました（エンドポイント未検出: http_404）。", "Kitsu comment-read verification failed (endpoint not found: http_404).")
+	case "network_error", "request_creation_error", "response_read_error":
+		return t(lang, "Kitsu コメントの読み取り確認に失敗しました（通信エラー: "+strings.TrimSpace(errorClass)+"）。", "Kitsu comment-read verification failed (network error: "+strings.TrimSpace(errorClass)+").")
+	default:
+		code := strings.TrimSpace(errorClass)
+		if code == "" {
+			code = "unknown_error"
+		}
+		return t(lang, "Kitsu コメントの読み取り確認が完全ではありません（理由: "+code+"）。", "Kitsu comment-read verification is degraded (reason: "+code+").")
 	}
 }
