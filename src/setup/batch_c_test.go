@@ -94,8 +94,8 @@ func TestBatchC_LoginCSRFEnforcesOriginAndReferer(t *testing.T) {
 		reqNoOrigin.Host = "sync.example.com"
 		rr := httptest.NewRecorder()
 		handler.ServeHTTP(rr, reqNoOrigin)
-		if rr.Code != http.StatusForbidden {
-			t.Fatalf("POST %s without Origin/Referer = %d, want 403", path, rr.Code)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("POST %s without Origin/Referer = %d, want 200", path, rr.Code)
 		}
 
 		reqBadOrigin := httptest.NewRequest(http.MethodPost, "http://sync.example.com"+path, strings.NewReader("email=a&password=b"))
@@ -105,6 +105,15 @@ func TestBatchC_LoginCSRFEnforcesOriginAndReferer(t *testing.T) {
 		handler.ServeHTTP(rrBad, reqBadOrigin)
 		if rrBad.Code != http.StatusForbidden {
 			t.Fatalf("POST %s with cross-origin = %d, want 403", path, rrBad.Code)
+		}
+
+		reqCrossSite := httptest.NewRequest(http.MethodPost, "http://sync.example.com"+path, strings.NewReader("email=a&password=b"))
+		reqCrossSite.Host = "sync.example.com"
+		reqCrossSite.Header.Set("Sec-Fetch-Site", "cross-site")
+		rrCrossSite := httptest.NewRecorder()
+		handler.ServeHTTP(rrCrossSite, reqCrossSite)
+		if rrCrossSite.Code != http.StatusForbidden {
+			t.Fatalf("POST %s with Sec-Fetch-Site: cross-site = %d, want 403", path, rrCrossSite.Code)
 		}
 
 		reqOK := httptest.NewRequest(http.MethodPost, "http://sync.example.com"+path, strings.NewReader("email=a&password=b"))

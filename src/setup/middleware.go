@@ -357,9 +357,6 @@ func CSRFProtection(next http.Handler) http.Handler {
 				http.Error(w, "referer mismatch", http.StatusForbidden)
 				return
 			}
-		} else {
-			http.Error(w, "origin or referer required", http.StatusForbidden)
-			return
 		}
 		next.ServeHTTP(w, r)
 	})
