@@ -91,9 +91,25 @@ func isHTTPSRequest(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
 	}
-	// For v0.1.0 self-hosted deployments, trust X-Forwarded-Proto=https by default.
+	if !requestFromTrustedProxy(r) {
+		return false
+	}
 	proto := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0])
 	return strings.EqualFold(proto, "https")
+}
+
+const baselineContentSecurityPolicy = "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+
+// SecurityHeaders sets baseline browser security headers on all HTTP responses.
+func SecurityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "same-origin")
+		h.Set("Content-Security-Policy", baselineContentSecurityPolicy)
+		next.ServeHTTP(w, r)
+	})
 }
 
 func sessionCookie(r *http.Request, value string, maxAge int) *http.Cookie {
@@ -533,13 +549,26 @@ func makeRoomForRateKey(m map[string][]time.Time, now time.Time, window time.Dur
 	}
 }
 
+func requestFromTrustedProxy(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	direct := strings.TrimSpace(r.RemoteAddr)
+	host := direct
+	if parsed, _, err := net.SplitHostPort(direct); err == nil {
+		host = parsed
+	}
+	ip := net.ParseIP(strings.TrimSpace(host))
+	return ip != nil && isTrustedProxyPeer(ip)
+}
+
 func loginPeerKey(r *http.Request) string {
 	direct := strings.TrimSpace(r.RemoteAddr)
 	host := direct
 	if parsed, _, err := net.SplitHostPort(direct); err == nil {
 		host = parsed
 	}
-	if ip := net.ParseIP(strings.TrimSpace(host)); ip != nil && isTrustedProxyPeer(ip) {
+	if requestFromTrustedProxy(r) {
 		if forwarded := forwardedPeerIP(r); forwarded != "" {
 			return "forwarded:" + forwarded
 		}

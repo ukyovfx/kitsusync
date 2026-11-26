@@ -48,7 +48,16 @@ func WriteAuditLog(db *gorm.DB, log AuditLog) {
 	// destination IDs, never the secret-bearing URL itself.
 	log.WebhookURL = ""
 	log.PreviousWebhookURL = ""
-	db.Create(&log)
+	if err := db.Create(&log).Error; err != nil {
+		slog.Warn("WriteAuditLog failed",
+			"err", err,
+			"task_id", log.TaskID,
+			"project_id", log.ProjectID,
+			"guild_id", log.GuildID,
+			"new_status", log.NewStatus,
+			"actor_kind", log.ActorKind,
+		)
+	}
 }
 
 func ListAuditLogs(db *gorm.DB, limit int) []AuditLog {
@@ -715,10 +724,56 @@ func DeleteProjectWebhooksByChannelName(db *gorm.DB, kitsuProjectID, channelName
 	return db.Where("kitsu_project_id = ? AND channel_name = ?", kitsuProjectID, channelName).Delete(&ProjectWebhook{}).Error
 }
 
+var (
+	webhookURLEncrypt func(string) (string, error)
+	webhookURLDecrypt func(string) (string, error)
+)
+
+// RegisterWebhookURLCrypto wires runtime secret encryption/decryption for
+// ProjectWebhook.WebhookURL without introducing a model->setup import cycle.
+func RegisterWebhookURLCrypto(encrypt, decrypt func(string) (string, error)) {
+	webhookURLEncrypt = encrypt
+	webhookURLDecrypt = decrypt
+}
+
+func encryptProjectWebhookURL(raw string) (string, error) {
+	if raw == "" || strings.HasPrefix(raw, "v1:") || webhookURLEncrypt == nil {
+		return raw, nil
+	}
+	return webhookURLEncrypt(raw)
+}
+
+func (w *ProjectWebhook) BeforeSave(_ *gorm.DB) error {
+	enc, err := encryptProjectWebhookURL(w.WebhookURL)
+	if err != nil {
+		return err
+	}
+	w.WebhookURL = enc
+	return nil
+}
+
+func (w *ProjectWebhook) AfterFind(_ *gorm.DB) error {
+	if !strings.HasPrefix(w.WebhookURL, "v1:") || webhookURLDecrypt == nil {
+		return nil
+	}
+	dec, err := webhookURLDecrypt(w.WebhookURL)
+	if err != nil {
+		slog.Warn("ProjectWebhook decrypt failed", "id", w.ID, "error_class", "webhook_decrypt_failed")
+		w.WebhookURL = ""
+		return nil
+	}
+	w.WebhookURL = dec
+	return nil
+}
+
 // UpdateProjectWebhookURL replaces the webhook URL for an existing ProjectWebhook record.
 // Used by the reconnect flow when a stale/broken webhook is replaced with a new one.
 func UpdateProjectWebhookURL(db *gorm.DB, id uint, newURL string) error {
-	return db.Model(&ProjectWebhook{}).Where("id = ?", id).Update("webhook_url", newURL).Error
+	stored, err := encryptProjectWebhookURL(newURL)
+	if err != nil {
+		return err
+	}
+	return db.Model(&ProjectWebhook{}).Where("id = ?", id).Update("webhook_url", stored).Error
 }
 
 // FindPendingChannel returns the task_type="" record for a channel created but not yet assigned.
@@ -747,9 +802,13 @@ func ListAllProjectWebhooks(db *gorm.DB) []ProjectWebhook {
 
 // FindChannelNameByWebhookURL returns the channel name associated with the given webhook URL.
 func FindChannelNameByWebhookURL(db *gorm.DB, webhookURL string) string {
-	var wh ProjectWebhook
-	if err := db.Where("webhook_url = ?", webhookURL).First(&wh).Error; err == nil {
-		return wh.ChannelName
+	if db == nil || webhookURL == "" {
+		return ""
+	}
+	for _, wh := range ListAllProjectWebhooks(db) {
+		if wh.WebhookURL == webhookURL {
+			return wh.ChannelName
+		}
 	}
 	return ""
 }

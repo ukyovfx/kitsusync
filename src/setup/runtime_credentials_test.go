@@ -231,6 +231,101 @@ func TestEncryptedDiscordRuntimeTokenSurvivesDatabaseReopen(t *testing.T) {
 	}
 }
 
+func TestProjectWebhookURLIsEncryptedAtRestAndReloadable(t *testing.T) {
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.ProjectWebhook{}); err != nil {
+		t.Fatal(err)
+	}
+
+	const webhookURL = "https://discord.com/api/webhooks/123456789012345678/secret-token-value"
+	if err := model.CreateProjectWebhook(db, "proj-1", "anim", "Animation", webhookURL, "chan-1"); err != nil {
+		t.Fatalf("CreateProjectWebhook: %v", err)
+	}
+
+	var rawStored string
+	if err := db.Table("project_webhooks").Select("webhook_url").Where("kitsu_project_id = ?", "proj-1").Scan(&rawStored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if rawStored == "" || rawStored == webhookURL || strings.Contains(rawStored, "secret-token-value") || !strings.HasPrefix(rawStored, "v1:") {
+		t.Fatalf("expected encrypted webhook_url in DB, got %q", rawStored)
+	}
+
+	rows := model.ListProjectWebhooks(db, "proj-1")
+	if len(rows) != 1 || rows[0].WebhookURL != webhookURL {
+		t.Fatalf("ListProjectWebhooks returned %+v, want %q", rows, webhookURL)
+	}
+	if got := model.FindProjectWebhookByID(db, rows[0].ID); got == nil || got.WebhookURL != webhookURL {
+		t.Fatalf("FindProjectWebhookByID returned %+v, want %q", got, webhookURL)
+	}
+	if ch := model.FindChannelNameByWebhookURL(db, webhookURL); ch != "anim" {
+		t.Fatalf("FindChannelNameByWebhookURL = %q, want anim", ch)
+	}
+
+	const updatedURL = "https://discord.com/api/webhooks/123456789012345678/rotated-token"
+	if err := model.UpdateProjectWebhookURL(db, rows[0].ID, updatedURL); err != nil {
+		t.Fatalf("UpdateProjectWebhookURL: %v", err)
+	}
+	var rawUpdated string
+	if err := db.Table("project_webhooks").Select("webhook_url").Where("id = ?", rows[0].ID).Scan(&rawUpdated).Error; err != nil {
+		t.Fatal(err)
+	}
+	if rawUpdated == updatedURL || strings.Contains(rawUpdated, "rotated-token") || !strings.HasPrefix(rawUpdated, "v1:") {
+		t.Fatalf("expected encrypted updated webhook_url in DB, got %q", rawUpdated)
+	}
+	if got := model.FindProjectWebhookByID(db, rows[0].ID); got == nil || got.WebhookURL != updatedURL {
+		t.Fatalf("FindProjectWebhookByID after update = %+v, want %q", got, updatedURL)
+	}
+}
+
+func TestLegacyPlaintextProjectWebhookMigratesAndReadsBack(t *testing.T) {
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.ProjectWebhook{}); err != nil {
+		t.Fatal(err)
+	}
+
+	const legacyURL = "https://discord.com/api/webhooks/987654321098765432/legacy-plaintext-token"
+	if err := db.Table("project_webhooks").Create(map[string]any{
+		"kitsu_project_id":   "proj-legacy",
+		"channel_name":       "comp",
+		"task_type":          "Compositing",
+		"webhook_url":        legacyURL,
+		"discord_channel_id": "chan-legacy",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// Pre-existing plaintext row reads back before migration.
+	rows := model.ListProjectWebhooks(db, "proj-legacy")
+	if len(rows) != 1 || rows[0].WebhookURL != legacyURL {
+		t.Fatalf("pre-migration read = %+v, want %q", rows, legacyURL)
+	}
+
+	if err := MigrateProjectWebhookURLs(db); err != nil {
+		t.Fatalf("MigrateProjectWebhookURLs: %v", err)
+	}
+
+	var rawAfter string
+	if err := db.Table("project_webhooks").Select("webhook_url").Where("kitsu_project_id = ?", "proj-legacy").Scan(&rawAfter).Error; err != nil {
+		t.Fatal(err)
+	}
+	if rawAfter == legacyURL || strings.Contains(rawAfter, "legacy-plaintext-token") || !strings.HasPrefix(rawAfter, "v1:") {
+		t.Fatalf("expected migrated encrypted webhook_url in DB, got %q", rawAfter)
+	}
+
+	rowsAfter := model.ListProjectWebhooks(db, "proj-legacy")
+	if len(rowsAfter) != 1 || rowsAfter[0].WebhookURL != legacyURL {
+		t.Fatalf("post-migration read = %+v, want %q", rowsAfter, legacyURL)
+	}
+}
+
 func newRuntimeCredentialTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})

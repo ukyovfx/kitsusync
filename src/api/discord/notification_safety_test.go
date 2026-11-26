@@ -72,6 +72,8 @@ func TestSendMessageRetriesRateLimitThenSucceeds(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id":"message-1"}`))
 	}))
 	defer server.Close()
+	oldHook := SetDiscordWebhookTestBase(server.URL)
+	defer SetDiscordWebhookTestBase(oldHook)
 
 	started := time.Now()
 	result := SendMessage(Payload{Content: "safe"}, server.URL, "", "")
@@ -93,6 +95,8 @@ func TestSendMessageDefersRateLimitBeyondRetryWaitCap(t *testing.T) {
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	defer server.Close()
+	oldHook := SetDiscordWebhookTestBase(server.URL)
+	defer SetDiscordWebhookTestBase(oldHook)
 
 	result := SendMessage(Payload{Content: "safe"}, server.URL, "", "")
 	if result.FailureCategory != "rate_limited" || !result.Retryable || result.Unknown || attempts != 1 {
@@ -109,6 +113,8 @@ func TestSendMessageClassifiesPermanentPayloadFailureWithoutRetry(t *testing.T) 
 				w.WriteHeader(status)
 			}))
 			defer server.Close()
+			oldHook := SetDiscordWebhookTestBase(server.URL)
+			defer SetDiscordWebhookTestBase(oldHook)
 
 			result := SendMessage(Payload{Content: "safe"}, server.URL, "", "")
 			if result.MessageID != "" || result.Retryable || result.Unknown || attempts != 1 {
@@ -127,7 +133,7 @@ func TestSendMessageTransportFailureIsUnknownWithoutRetry(t *testing.T) {
 		return nil, errors.New("connection reset after send")
 	})
 
-	result := SendMessage(Payload{Content: "safe"}, "https://discord.example/webhook", "", "")
+	result := SendMessage(Payload{Content: "safe"}, "https://discord.com/api/webhooks/123456789012345678/test-token", "", "")
 	if result.FailureCategory != "network_error" || !result.Unknown || result.Retryable || attempts != 1 {
 		t.Fatalf("expected one unknown transport outcome, result=%+v attempts=%d", result, attempts)
 	}
@@ -140,6 +146,8 @@ func TestSendMessageServerFailureIsUnknownWithoutRetry(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer server.Close()
+	oldHook := SetDiscordWebhookTestBase(server.URL)
+	defer SetDiscordWebhookTestBase(oldHook)
 
 	result := SendMessage(Payload{Content: "safe"}, server.URL, "", "")
 	if result.FailureCategory != "discord_server_error" || !result.Unknown || result.Retryable || attempts != 1 {
@@ -157,6 +165,8 @@ func TestSendMessageMarksMalformedOrUnusableSuccessResponseUnknown(t *testing.T)
 				_, _ = w.Write([]byte(body))
 			}))
 			defer server.Close()
+			oldHook := SetDiscordWebhookTestBase(server.URL)
+			defer SetDiscordWebhookTestBase(oldHook)
 
 			result := SendMessage(Payload{Content: "safe"}, server.URL, "", "")
 			if result.MessageID != "" || result.FailureCategory != "unknown_response" || !result.Unknown || result.Retryable || attempts != 1 {
@@ -174,6 +184,8 @@ func TestSendMessageMarksMissingThreadChannelIDUnknown(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id":"message-1"}`))
 	}))
 	defer server.Close()
+	oldHook := SetDiscordWebhookTestBase(server.URL)
+	defer SetDiscordWebhookTestBase(oldHook)
 
 	result := SendMessage(Payload{Content: "safe"}, server.URL, "", "new thread")
 	if result.MessageID != "" || result.ThreadID != "" || result.FailureCategory != "unknown_response" || !result.Unknown || result.Retryable || attempts != 1 {
@@ -187,9 +199,48 @@ func TestSendMessageReturnsDiscordMessageIDOnSuccess(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id":"message-1"}`))
 	}))
 	defer server.Close()
+	oldHook := SetDiscordWebhookTestBase(server.URL)
+	defer SetDiscordWebhookTestBase(oldHook)
 
 	result := SendMessage(Payload{Content: "safe"}, server.URL, "", "")
 	if result.MessageID != "message-1" || result.Unknown || result.FailureCategory != "" {
 		t.Fatalf("normal success changed: %+v", result)
+	}
+}
+
+func TestWebhookFunctionsRejectUntrustedURLsWithoutHTTPRequest(t *testing.T) {
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	requests := 0
+	http.DefaultTransport = roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		return nil, errors.New("unexpected HTTP request")
+	})
+
+	badURLs := []string{
+		"",
+		"http://127.0.0.1/api/webhooks/123/abc",
+		"http://discord.com/api/webhooks/123/abc",
+		"https://example.com/api/webhooks/123/abc",
+		"https://discord.com/api/v10/channels/123/messages",
+		"https://discord.com/api/webhooks/not-numeric/abc",
+		"https://discord.com/api/webhooks/123/",
+		"https://discord.com:8443/api/webhooks/123/abc",
+		"https://discord.com/api/webhooks/123/abc?foo=bar",
+	}
+	for _, raw := range badURLs {
+		res := SendMessage(Payload{Content: "test"}, raw, "", "")
+		if res.MessageID != "" || res.FailureCategory != "invalid_webhook_url" {
+			t.Fatalf("SendMessage(%q) = %+v, want invalid_webhook_url", raw, res)
+		}
+		if DeleteMessage(raw, "msg-1", "") {
+			t.Fatalf("DeleteMessage(%q) = true, want false", raw)
+		}
+		if EditMessage(raw, "msg-1", "", Payload{Content: "test"}) {
+			t.Fatalf("EditMessage(%q) = true, want false", raw)
+		}
+	}
+	if requests != 0 {
+		t.Fatalf("expected 0 HTTP requests for invalid webhook URLs, got %d", requests)
 	}
 }

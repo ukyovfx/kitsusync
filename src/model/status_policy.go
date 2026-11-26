@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gookit/slog"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -369,7 +370,18 @@ func RecordNotificationDecision(db *gorm.DB, decision NotificationDecision) erro
 	if decision.CreatedAt.IsZero() {
 		decision.CreatedAt = time.Now().UTC()
 	}
-	return db.Create(&decision).Error
+	if err := db.Create(&decision).Error; err != nil {
+		slog.Warn("RecordNotificationDecision failed",
+			"err", err,
+			"production_id", decision.ProductionID,
+			"task_id", decision.TaskID,
+			"signal_kind", decision.SignalKind,
+			"rule_id", decision.RuleID,
+			"outcome", decision.Outcome,
+		)
+		return err
+	}
+	return nil
 }
 
 // DecisionFactsJSON encodes a facts map for the log.

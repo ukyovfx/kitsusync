@@ -153,10 +153,12 @@ func TestCSRFProtectionOriginAndRefererValidation(t *testing.T) {
 		origin     string
 		referer    string
 		forwarded  string
+		remoteAddr string
 		wantStatus int
 	}{
 		{name: "wrong origin", origin: "https://evil.example", wantStatus: http.StatusForbidden},
-		{name: "correct origin", origin: "https://admin.example", forwarded: "https", wantStatus: http.StatusOK},
+		{name: "correct origin", origin: "https://admin.example", forwarded: "https", remoteAddr: "127.0.0.1:12345", wantStatus: http.StatusOK},
+		{name: "untrusted forwarded proto ignored", origin: "https://admin.example", forwarded: "https", remoteAddr: "198.51.100.10:12345", wantStatus: http.StatusForbidden},
 		{name: "same origin referer fallback", referer: "http://admin.example/bot/admin", wantStatus: http.StatusOK},
 		{name: "wrong referer fallback", referer: "http://evil.example/bot/admin", wantStatus: http.StatusForbidden},
 		{name: "missing browser origin headers", wantStatus: http.StatusForbidden},
@@ -166,6 +168,9 @@ func TestCSRFProtectionOriginAndRefererValidation(t *testing.T) {
 			resetSessions()
 			token := newSessionToken("manager@example.com", "", "manager", "/bot/admin")
 			req := httptest.NewRequest(http.MethodPost, "http://admin.example/bot/admin", nil)
+			if tt.remoteAddr != "" {
+				req.RemoteAddr = tt.remoteAddr
+			}
 			req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
 			if tt.origin != "" {
 				req.Header.Set("Origin", tt.origin)
@@ -230,14 +235,53 @@ func TestCSRFProtectionLeavesGETAndUnauthenticatedRequestsUnchanged(t *testing.T
 
 func TestSessionCookieUsesSecureForForwardedHTTPS(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/bot/login", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
 	req.Header.Set("X-Forwarded-Proto", "https")
 
 	cookie := sessionCookie(req, "token", int((15 * time.Minute).Seconds()))
 	if !cookie.Secure {
-		t.Fatal("expected secure cookie for forwarded https requests")
+		t.Fatal("expected secure cookie for forwarded https requests from trusted proxy")
 	}
 	if cookie.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("expected lax same-site cookie, got %v", cookie.SameSite)
+	}
+
+	untrusted := httptest.NewRequest(http.MethodGet, "/bot/login", nil)
+	untrusted.RemoteAddr = "198.51.100.10:12345"
+	untrusted.Header.Set("X-Forwarded-Proto", "https")
+	if sessionCookie(untrusted, "token", int((15 * time.Minute).Seconds())).Secure {
+		t.Fatal("expected non-secure cookie when X-Forwarded-Proto comes from untrusted peer")
+	}
+}
+
+func TestSecurityHeadersMiddleware(t *testing.T) {
+	handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":true}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<html><body>admin</body></html>`))
+	}))
+
+	for _, path := range []string{"/bot/admin", "/api/setup/status"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if got := rr.Header().Get("X-Frame-Options"); got != "DENY" {
+			t.Fatalf("%s: X-Frame-Options=%q, want DENY", path, got)
+		}
+		if got := rr.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Fatalf("%s: X-Content-Type-Options=%q, want nosniff", path, got)
+		}
+		if got := rr.Header().Get("Referrer-Policy"); got != "same-origin" {
+			t.Fatalf("%s: Referrer-Policy=%q, want same-origin", path, got)
+		}
+		wantCSP := "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		if got := rr.Header().Get("Content-Security-Policy"); got != wantCSP {
+			t.Fatalf("%s: Content-Security-Policy=%q, want %q", path, got, wantCSP)
+		}
 	}
 }
 
