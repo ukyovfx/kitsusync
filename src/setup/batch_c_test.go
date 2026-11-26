@@ -1,7 +1,9 @@
 package setup
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -244,5 +246,35 @@ func TestBatchC_PublicRouteStateAndBackupUnit(t *testing.T) {
 	connBody := renderConnectionsDisplayBodyWithBotIdentity("en", httptest.NewRequest(http.MethodGet, "/bot/admin/bot?lang=en", nil), db, "", "ok", "Connected", "https://kitsu.example.com", "", true, false, "", "")
 	if !strings.Contains(connBody, "SQLite database file and runtime-secret.key together") {
 		t.Fatalf("connections page missing backup unit line:\n%s", connBody)
+	}
+}
+
+func TestBatchC_ForumPermissionFailureSanitizesLogFields(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+
+	oldGetter := forumPermissionGetter
+	t.Cleanup(func() { forumPermissionGetter = oldGetter })
+	forumPermissionGetter = func(string, string, string) (int64, error) {
+		return 0, errors.New("boom\r\nforged_line=1")
+	}
+
+	settings := model.ProductionForumSettings{
+		Config: model.ProductionForumConfig{ProductionID: "p-perm", GuildID: "123456789012345678"},
+		Routes: []model.ProductionForumRoute{{ProductionID: "p-perm", TaskTypeID: "tt-1", TaskTypeName: "Anim\r\nforged_task=1", ForumChannelID: "223456789012345678"}},
+	}
+	problems := checkForumPermissionIssues("p-perm", "Perm Prod", settings, "bot-token")
+	if len(problems) != 1 || !problems[0].CheckFailed {
+		t.Fatalf("expected CheckFailed problem, got %+v", problems)
+	}
+
+	out := logs.String()
+	if strings.Contains(out, `\r`) || strings.Contains(out, `\n`) {
+		t.Fatalf("logged output should strip CR/LF from task_type and err, got: %s", out)
+	}
+	if !strings.Contains(out, `task_type="Animforged_task=1"`) || !strings.Contains(out, `err="boomforged_line=1"`) {
+		t.Fatalf("unexpected sanitized log output: %s", out)
 	}
 }

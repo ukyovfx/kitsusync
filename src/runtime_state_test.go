@@ -74,7 +74,7 @@ func TestReadinessHandlerAcceptsOnlyConfiguredAuthenticatedRuntime(t *testing.T)
 	}
 }
 
-func TestHealthHandlerReportsSetupRequiredWithoutSecrets(t *testing.T) {
+func TestHealthHandlerReportsBareStatusWithoutSecretsOrBuildInfo(t *testing.T) {
 	runtime := newRuntimeManager()
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rr := httptest.NewRecorder()
@@ -82,12 +82,9 @@ func TestHealthHandlerReportsSetupRequiredWithoutSecrets(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("health status = %d", rr.Code)
 	}
-	body := rr.Body.String()
-	if !strings.Contains(body, `"mode":"setup_required"`) || !strings.Contains(body, `"notifications":"paused"`) {
+	body := strings.TrimSpace(rr.Body.String())
+	if body != `{"status":"ok"}` {
 		t.Fatalf("unexpected health body: %s", body)
-	}
-	if strings.Contains(body, `"readiness"`) {
-		t.Fatalf("process health must not embed dependency readiness: %s", body)
 	}
 }
 
@@ -114,7 +111,7 @@ func TestHealthHandlerReadyConfiguredRuntimeIsHealthy(t *testing.T) {
 	runtime.mu.Unlock()
 	rr := httptest.NewRecorder()
 	healthHandler(runtime)(rr, httptest.NewRequest(http.MethodGet, "/health", nil))
-	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"mode":"configured"`) {
+	if rr.Code != http.StatusOK || strings.TrimSpace(rr.Body.String()) != `{"status":"ok"}` {
 		t.Fatalf("configured runtime health = %d %s", rr.Code, rr.Body.String())
 	}
 }

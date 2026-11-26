@@ -131,15 +131,9 @@ func healthHandler(runtime *runtimeManager, localChecks ...func(context.Context)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		response := struct {
-			Status  string          `json:"status"`
-			Build   buildInfo       `json:"build"`
-			Runtime runtimeSnapshot `json:"runtime"`
-		}{Status: statusText, Build: currentBuildInfo()}
-		if runtime != nil {
-			response.Runtime = runtime.snapshot()
-		}
-		_ = json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(struct {
+			Status string `json:"status"`
+		}{Status: statusText})
 	}
 }
 

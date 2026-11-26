@@ -1899,7 +1899,7 @@ func validConfiguredStorageURL(raw string) bool {
 		return false
 	}
 	parsed, err := url.Parse(raw)
-	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" && parsed.User == nil
+	return err == nil && parsed.Scheme == "https" && strings.EqualFold(parsed.Host, "drive.google.com") && parsed.User == nil
 }
 
 type connectionStatus struct {
