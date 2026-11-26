@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 
 	"gorm.io/gorm"
@@ -138,10 +137,6 @@ func (r Recipients) adminFallback(task model.ForumTask) ([]string, []string, err
 		name := ""
 		if r.TaskTypeName != nil {
 			name = r.TaskTypeName(task.TaskTypeID)
-		}
-		detail := "WFAの宛先（レビュアー／部門スーパーバイザー）が導けなかったため、管理者へフォールバックしました。"
-		if raiseErr := model.RaiseAdminException(r.DB, model.ExceptionRecipientUnresolved, task.TaskTypeID, name, task.ProjectID, detail); raiseErr != nil {
-			slog.Warn("forum: could not raise the recipient-unresolved exception", "error_class", "forum_exception_raise_failed", "task_id", task.TaskID, "err", raiseErr)
 		}
 		_ = model.RecordNotificationDecision(r.DB, model.NotificationDecision{
 			ProductionID: task.ProjectID,

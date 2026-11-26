@@ -144,12 +144,6 @@ func ReadFromPath(path string) (Config, error) {
 func (c *Config) Validate() []string {
 	var issues []string
 
-	if c.Discord.EmbedsPerRequests <= 0 {
-		issues = append(issues, "[FATAL] discord.embedsPerRequests must be greater than zero")
-	}
-	if c.Discord.RequestsPerMinute <= 0 {
-		issues = append(issues, "[FATAL] discord.requestsPerMinute must be greater than zero")
-	}
 	if c.Kitsu.PollIntervalSeconds != 0 && (c.Kitsu.PollIntervalSeconds < minPollIntervalSeconds || c.Kitsu.PollIntervalSeconds > maxPollIntervalSeconds) {
 		issues = append(issues, fmt.Sprintf("[FATAL] kitsu.pollIntervalSeconds must be between %d and %d", minPollIntervalSeconds, maxPollIntervalSeconds))
 	}

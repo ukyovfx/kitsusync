@@ -23,7 +23,7 @@ func newForumPageDB(t *testing.T) *gorm.DB {
 			_ = sqlDB.Close()
 		}
 	})
-	if err := db.AutoMigrate(&model.ProductionForumConfig{}, &model.ProductionForumRoute{}, &model.ProductionForumStatusRole{}, &model.ProductionForumTag{}, &model.ProductionHandoffConfig{}, &model.ProductionHandoffProductType{}, &model.ProductionHandoffRoute{}, &model.ForumBaseline{}, &model.ForumTask{}, &model.StudioStatusPolicy{}, &model.StudioTaskRoute{}, &model.ProductionTaskRoute{}, &model.AdminException{}, &model.NotificationDecision{}); err != nil {
+	if err := db.AutoMigrate(&model.ProductionForumConfig{}, &model.ProductionForumRoute{}, &model.ProductionForumStatusRole{}, &model.ProductionForumTag{}, &model.ProductionHandoffConfig{}, &model.ProductionHandoffProductType{}, &model.ProductionHandoffRoute{}, &model.ForumBaseline{}, &model.ForumTask{}, &model.StudioStatusPolicy{}, &model.StudioTaskRoute{}, &model.ProductionTaskRoute{}, &model.NotificationDecision{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&model.Project{KitsuProjectID: "p1", Name: "Synthetic Production", DiscordGuildID: "g1"}).Error; err != nil {

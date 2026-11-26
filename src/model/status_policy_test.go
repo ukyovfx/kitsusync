@@ -14,7 +14,7 @@ func newPolicyDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&StudioStatusPolicy{}, &StudioTaskRoute{}, &ProductionTaskRoute{}, &AdminException{}, &NotificationDecision{}); err != nil {
+	if err := db.AutoMigrate(&StudioStatusPolicy{}, &StudioTaskRoute{}, &ProductionTaskRoute{}, &NotificationDecision{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	t.Cleanup(func() {
@@ -70,10 +70,6 @@ func TestReconcileStudioStatusPolicies(t *testing.T) {
 	if policies["s-mystery"].Nature != StatusNatureAmbiguous {
 		t.Fatalf("mystery nature = %q", policies["s-mystery"].Nature)
 	}
-	open, err := OpenAdminExceptions(db)
-	if err != nil || len(open) != 0 {
-		t.Fatalf("expected no admin exceptions for ambiguous status, got %+v err=%v", open, err)
-	}
 
 	// A rename Done -> Approved keeps the nature, so the snapshot just moves.
 	if err := ReconcileStudioStatusPolicies(db, []StatusInfo{{ID: "s-done", Name: "Approved"}}); err != nil {
@@ -91,10 +87,6 @@ func TestReconcileStudioStatusPolicies(t *testing.T) {
 	policies, _ = LoadStudioStatusPolicies(db)
 	if policies["s-done"].Nature != StatusNatureRetake {
 		t.Fatalf("nature not updated on auto-derived rename: %+v", policies["s-done"])
-	}
-	open, _ = OpenAdminExceptions(db)
-	if len(open) != 0 {
-		t.Fatalf("unexpected exceptions after rename: %+v", open)
 	}
 
 	// A manual classification is never re-derived.
@@ -144,26 +136,5 @@ func TestEffectiveTaskRouteInheritance(t *testing.T) {
 	// An unwired task type reports found=false.
 	if _, _, found, err := EffectiveTaskRoute(db, "prod-1", "tt-unknown"); err != nil || found {
 		t.Fatalf("unknown: found=%v err=%v", found, err)
-	}
-}
-
-// Exceptions aggregate repeats of the same subject into one open row.
-func TestAdminExceptionAggregation(t *testing.T) {
-	db := newPolicyDB(t)
-	for i := 0; i < 3; i++ {
-		if err := RaiseAdminException(db, ExceptionNoRoute, "tt-fx", "FX", "prod-1", "no wiring"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	open, err := OpenAdminExceptions(db)
-	if err != nil || len(open) != 1 || open[0].SeenCount != 3 {
-		t.Fatalf("open = %+v err=%v", open, err)
-	}
-	if err := ResolveAdminException(db, open[0].ID, false); err != nil {
-		t.Fatal(err)
-	}
-	open, _ = OpenAdminExceptions(db)
-	if len(open) != 0 {
-		t.Fatalf("still open: %+v", open)
 	}
 }

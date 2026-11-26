@@ -27,7 +27,7 @@ func newForumDB(t *testing.T) *gorm.DB {
 		&model.ForumFlapState{}, &model.ForumDMChannel{},
 		&model.ProductionForumConfig{}, &model.ProductionForumRoute{},
 		&model.ProductionForumStatusRole{}, &model.ProductionForumTag{},
-		&model.StudioStatusPolicy{}, &model.NotificationDecision{}, &model.AdminException{}, &model.Project{}, &model.UserMap{},
+		&model.StudioStatusPolicy{}, &model.NotificationDecision{}, &model.Project{}, &model.UserMap{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

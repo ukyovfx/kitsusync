@@ -547,10 +547,7 @@ func getDiscordSettings(db *gorm.DB, conf config.Config) (botToken, guildID, web
 	if botToken == "" && strings.TrimSpace(model.GetSetting(db, setup.RuntimeDiscordBotTokenSettingKey)) == "" {
 		botToken = conf.Discord.BotToken
 	}
-	guildID = model.GetSetting(db, "discord.guildID")
-	if guildID == "" {
-		guildID = os.Getenv("DISCORD_GUILD_ID")
-	}
+	guildID = os.Getenv("DISCORD_GUILD_ID")
 	if guildID == "" {
 		guildID = conf.Discord.GuildID
 	}
@@ -959,7 +956,6 @@ func migrateApplicationSchema(db *gorm.DB) error {
 		&model.StudioStatusPolicy{},
 		&model.StudioTaskRoute{},
 		&model.ProductionTaskRoute{},
-		&model.AdminException{},
 		&model.NotificationDecision{},
 	); err != nil {
 		return fmt.Errorf("migrate application schema: %w", err)
@@ -1023,11 +1019,13 @@ func main() {
 	appEnv := os.Getenv("APP_ENV")
 	logLevel := logLevelForEnv(appEnv)
 
+	applyProcessUmask()
+
 	rotateW, err := rotatefile.NewWriter(&rotatefile.Config{
 		Filepath:   "./logs/all-levels.log",
 		MaxSize:    10 * rotatefile.OneMByte,
 		BackupNum:  5,
-		FilePerm:   rotatefile.DefaultFilePerm,
+		FilePerm:   0600,
 		RenameFunc: rotatefile.DefaultFilenameFn,
 	})
 	if err != nil {
@@ -1333,7 +1331,6 @@ func main() {
 			botHandler(w, r)
 		}))
 		mux.HandleFunc(prefix+"/admin/bot", botRouteHandler)
-		mux.HandleFunc(prefix+"/admin/bot/connections", botRouteHandler)
 		mux.HandleFunc(prefix+"/admin/bot/statuses", botRouteHandler)
 		mux.HandleFunc(prefix+"/admin/bot/wiring", botRouteHandler)
 		mux.HandleFunc(prefix+"/admin/projects", adminAuth(setup.ReadOnlyAuditRoute(runtime.ready, func(w http.ResponseWriter, r *http.Request) {

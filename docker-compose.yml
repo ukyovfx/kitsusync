@@ -12,6 +12,11 @@ services:
         BUILD_SOURCE_ID: "${KITSUSYNC_BUILD_SOURCE_ID:-unknown}"
         IMAGE_REVISION: "${KITSUSYNC_IMAGE_REVISION:-unknown}"
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
     logging:
       driver: json-file
       options:
@@ -39,7 +44,7 @@ services:
   editor:
     profiles:
       - debug
-    image: filebrowser/filebrowser:latest
+    image: filebrowser/filebrowser@sha256:a469ea076d4a1b4b1d86a41d130f2f536cd9da996a2b1fb39c0d7635f9d89b9a
     restart: unless-stopped
     user: "1000:1000"
     ports:
@@ -52,7 +57,7 @@ services:
       - PUID=1000
       - PGID=1000
       - FB_USERNAME=${FB_USERNAME}
-      - FB_PASSWORD=${FB_PASSWORD}
+      - FB_PASSWORD=${FB_PASSWORD:?FB_PASSWORD is required}
 
 volumes:
   filebrowser_data:

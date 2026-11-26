@@ -1198,13 +1198,18 @@ func parseTaskTemplate(tplFilePath string, data Template) string {
 	if err != nil {
 		return ""
 	}
-	t := template.Must(template.New("template").Funcs(template.FuncMap{
+	t, err := template.New("template").Funcs(template.FuncMap{
 		"json": func(value string) string {
 			encoded, _ := json.Marshal(value)
 			return strings.Trim(string(encoded), "\"")
 		},
-	}).Parse(string(tpl)))
+	}).Parse(string(tpl))
+	if err != nil {
+		return ""
+	}
 	output := new(bytes.Buffer)
-	t.Execute(output, data)
+	if err := t.Execute(output, data); err != nil {
+		return ""
+	}
 	return strings.TrimSpace(output.String())
 }

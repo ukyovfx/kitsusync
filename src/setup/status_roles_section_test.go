@@ -132,7 +132,7 @@ func TestStatusRolesDisplayOmitsProductionHeadingAndSummaryLine(t *testing.T) {
 	}
 }
 
-func TestConnectionsPageRendersDirectlyAndSubpageRedirects(t *testing.T) {
+func TestConnectionsPageRendersDirectly(t *testing.T) {
 	db := newSetupStateTestDB(t)
 	w := httptest.NewRecorder()
 	BotHandler(db, nil)(w, httptest.NewRequest(http.MethodGet, "/bot/admin/bot?lang=ja", nil))
@@ -149,12 +149,6 @@ func TestConnectionsPageRendersDirectlyAndSubpageRedirects(t *testing.T) {
 	}
 	if strings.Contains(body, `data-bot-hub`) || strings.Contains(body, `connections-sublinks`) {
 		t.Fatalf("connections page must not render hub or plain sublinks")
-	}
-
-	redir := httptest.NewRecorder()
-	BotHandler(db, nil)(redir, httptest.NewRequest(http.MethodGet, "/bot/admin/bot/connections?edit=1&lang=en", nil))
-	if redir.Code != http.StatusSeeOther || redir.Header().Get("Location") != "/bot/admin/bot?edit=1&lang=en" {
-		t.Fatalf("expected redirect from /bot/admin/bot/connections to /bot/admin/bot?edit=1&lang=en, got status=%d location=%q", redir.Code, redir.Header().Get("Location"))
 	}
 }
 

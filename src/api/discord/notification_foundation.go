@@ -87,7 +87,19 @@ func renderCurrentNotificationCardPayload(data Template) Payload {
 	}
 }
 
+func sanitizeTemplatePreset(preset string) string {
+	switch strings.ToLower(strings.TrimSpace(preset)) {
+	case "rich":
+		return "rich"
+	case "eng":
+		return "eng"
+	default:
+		return "rich"
+	}
+}
+
 func renderTemplateNotificationPayload(data Template, preset string) Payload {
+	preset = sanitizeTemplatePreset(preset)
 	author := parseTaskTemplate("tpl/"+preset+"/author.tpl", data)
 	title := parseTaskTemplate("tpl/"+preset+"/title.tpl", data)
 	description := parseTaskTemplate("tpl/"+preset+"/description.tpl", data)

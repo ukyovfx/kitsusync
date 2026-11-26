@@ -336,9 +336,9 @@ func TestHandoffNoAssigneeChoiceIsStored(t *testing.T) {
 }
 
 // A stored self-route (Layout -> Layout, possible from the older editor)
-// is not offered as a checkbox anymore, but a save of the page carries it
-// through untouched instead of silently dropping it.
-func TestHandoffSelfRouteIsPreservedButNotOffered(t *testing.T) {
+// is neither offered as a checkbox nor carried through a hidden input, so
+// saving the wiring cleans up stale self-routes.
+func TestHandoffSelfRouteIsDroppedAndNotOffered(t *testing.T) {
 	stubHandoffTaskTypes(t, handoffTaskTypes())
 	db := newForumPageDB(t)
 	if err := model.SaveStudioTaskRoute(db, model.StudioTaskRoute{FromTaskTypeID: "tt-lay", FromTaskTypeName: "Layout", NotifyTaskTypeIDs: "tt-lay,tt-anim"}); err != nil {
@@ -351,25 +351,15 @@ func TestHandoffSelfRouteIsPreservedButNotOffered(t *testing.T) {
 	if strings.Contains(section, `<input type="checkbox" name="st_notify_tt-lay" value="tt-lay"`) {
 		t.Fatal("the studio editor offers Layout as its own target")
 	}
-	if !strings.Contains(section, `<input type="hidden" name="st_notify_tt-lay" value="tt-lay">`) {
-		t.Fatal("the stored studio self-route is not carried through the form")
+	if strings.Contains(section, `<input type="hidden" name="st_notify_tt-lay" value="tt-lay">`) {
+		t.Fatal("the stored studio self-route should not be carried through a hidden input")
 	}
 	body := handoffGet(t, db).Body.String()
 	if strings.Contains(body, `<input type="checkbox" name="ov_notify_tt-lay" value="tt-lay"`) {
 		t.Fatal("the override editor offers Layout as its own target")
 	}
-	if !strings.Contains(body, `<input type="hidden" name="ov_notify_tt-lay" value="tt-lay">`) {
-		t.Fatal("the stored override self-route is not carried through the form")
-	}
-	// Saving what the form submits keeps the self-routes.
-	form := url.Values{}
-	form["st_notify_tt-lay"] = []string{"tt-lay", "tt-anim"}
-	if err := saveStudioRoutesRequest(t, db, form); err != nil {
-		t.Fatalf("save studio routes: %v", err)
-	}
-	routes, err := model.LoadStudioTaskRoutes(db)
-	if err != nil || len(routes) != 1 || routes[0].NotifyTaskTypeIDs != "tt-lay,tt-anim" {
-		t.Fatalf("studio routes after save = %+v err=%v", routes, err)
+	if strings.Contains(body, `<input type="hidden" name="ov_notify_tt-lay" value="tt-lay">`) {
+		t.Fatal("the stored override self-route should not be carried through a hidden input")
 	}
 }
 
