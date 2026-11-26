@@ -875,3 +875,39 @@ func TestLoginHandlerRejectsMissingOrBelowManagerRole(t *testing.T) {
 		})
 	}
 }
+
+func TestNewSessionTokenRecentAuthRequiresExactBotEditURL(t *testing.T) {
+	resetSessions()
+	t.Cleanup(resetSessions)
+
+	for _, tc := range []struct {
+		name      string
+		next      string
+		wantGrant bool
+	}{
+		{"exact path and edit=1", "/bot/admin/bot?edit=1", true},
+		{"exact path with extra query", "/bot/admin/bot?edit=1&lang=en", true},
+		{"path suffix trick", "/bot/admin/botx?edit=1", false},
+		{"nested next query trick", "/bot/x?next=/bot/admin/bot&edit=1", false},
+		{"external host with matching path", "https://evil.example/bot/admin/bot?edit=1", false},
+		{"protocol relative host with matching path", "//evil.example/bot/admin/bot?edit=1", false},
+		{"wrong edit value", "/bot/admin/bot?edit=10", false},
+		{"missing edit param", "/bot/admin/bot", false},
+		{"unparseable next", "://invalid", false},
+		{"empty next", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			token, err := newSessionTokenChecked("manager@example.com", "", "manager", tc.next)
+			if err != nil {
+				t.Fatalf("newSessionTokenChecked failed: %v", err)
+			}
+			sessionMu.Lock()
+			session := sessions[token]
+			sessionMu.Unlock()
+			gotGrant := !session.BotEditUntil.IsZero()
+			if gotGrant != tc.wantGrant {
+				t.Fatalf("next=%q: granted=%v, want %v", tc.next, gotGrant, tc.wantGrant)
+			}
+		})
+	}
+}

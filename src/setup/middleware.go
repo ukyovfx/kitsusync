@@ -131,8 +131,15 @@ func newSessionToken(email, kitsuToken, role, next string) string {
 }
 
 func newSessionTokenChecked(email, kitsuToken, role, next string) (string, error) {
-	grantRecentAuth := strings.Contains(next, "/bot/admin/bot") && strings.Contains(next, "edit=1")
-	return createSessionTokenChecked(email, kitsuToken, role, grantRecentAuth)
+	return createSessionTokenChecked(email, kitsuToken, role, shouldGrantRecentBotAuth(next))
+}
+
+func shouldGrantRecentBotAuth(next string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(next))
+	if err != nil || parsed.Scheme != "" || parsed.Host != "" {
+		return false
+	}
+	return parsed.Path == "/bot/admin/bot" && parsed.Query().Get("edit") == "1"
 }
 
 func newRecentlyAuthenticatedSessionTokenChecked(email, kitsuToken, role string) (string, error) {

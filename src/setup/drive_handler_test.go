@@ -186,3 +186,26 @@ func TestDriveStorageSuccessFeedbackIsStyledInRenderedDocument(t *testing.T) {
 		t.Fatalf("Storage Settings DOM order is wrong: notice=%d header=%d tabs=%d form=%d", noticeAt, headerAt, tabsAt, formAt)
 	}
 }
+
+func TestValidConfiguredStorageURLStrictGoogleDriveCheck(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{"canonical google drive folder", "https://drive.google.com/drive/folders/123456", true},
+		{"http rejected", "http://drive.google.com/drive/folders/123456", false},
+		{"other host rejected", "https://example.com/drive/folders/123456", false},
+		{"lookalike suffix host rejected", "https://drive.google.com.evil.example/drive/folders/123456", false},
+		{"lookalike subdomain rejected", "https://evil.drive.google.com/drive/folders/123456", false},
+		{"userinfo rejected", "https://user@drive.google.com/drive/folders/123456", false},
+		{"placeholder rejected", "https://drive.google.com/drive/folders/YOUR_FOLDER_ID", false},
+		{"empty rejected", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := validConfiguredStorageURL(tc.raw); got != tc.want {
+				t.Fatalf("validConfiguredStorageURL(%q) = %v, want %v", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
