@@ -334,11 +334,13 @@ func CSRFProtection(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if _, ok := currentSessionData(r); !ok {
-			// Preserve the existing unauthenticated behavior; RequireSession
-			// remains responsible for redirecting or rejecting the request.
-			next.ServeHTTP(w, r)
-			return
+		if !isLoginCSRFPath(r.URL.Path) {
+			if _, ok := currentSessionData(r); !ok {
+				// Preserve the existing unauthenticated behavior; RequireSession
+				// remains responsible for redirecting or rejecting the request.
+				next.ServeHTTP(w, r)
+				return
+			}
 		}
 		if strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "cross-site") {
 			http.Error(w, "cross-site request rejected", http.StatusForbidden)
@@ -372,12 +374,17 @@ func csrfUnsafeMethod(method string) bool {
 	}
 }
 
+func isLoginCSRFPath(path string) bool {
+	return path == "/login" || path == "/bot/login"
+}
+
 func csrfProtectedPath(path string) bool {
 	return path == "/setup" || path == "/bot/setup" ||
 		path == "/admin" || path == "/bot/admin" ||
 		strings.HasPrefix(path, "/admin/") || strings.HasPrefix(path, "/bot/admin/") ||
 		strings.HasPrefix(path, "/api/setup/") || strings.HasPrefix(path, "/bot/api/setup/") ||
-		path == "/logout" || path == "/bot/logout"
+		path == "/logout" || path == "/bot/logout" ||
+		isLoginCSRFPath(path)
 }
 
 func requestOrigin(r *http.Request) string {

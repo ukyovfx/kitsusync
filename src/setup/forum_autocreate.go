@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -450,6 +451,7 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 		return settings, err
 	}
 	model.DeleteSetting(db, forumAutoCreateCheckKey(productionID))
+	RefreshForumPermissionProblems(db, productionID, projectName, settings, botToken)
 	return settings, nil
 }
 
@@ -571,6 +573,115 @@ func botChannelPermissionsInGuild(guildID, channelID, botID, botToken string) (i
 		return int64(bits), true, nil
 	}
 	return 0, false, nil
+}
+
+const forumPermissionProblemsPrefix = "forum.permission_problems."
+
+// ForumPermissionProblem describes missing or unverifiable Bot permissions on
+// a routed Discord forum channel for a Production.
+type ForumPermissionProblem struct {
+	ProductionID   string   `json:"production_id"`
+	ProductionName string   `json:"production_name"`
+	TaskTypeName   string   `json:"task_type_name"`
+	MissingEN      []string `json:"missing_en,omitempty"`
+	MissingJA      []string `json:"missing_ja,omitempty"`
+	CheckFailed    bool     `json:"check_failed,omitempty"`
+}
+
+func checkForumPermissionIssues(productionID, productionName string, settings model.ProductionForumSettings, botToken string) []ForumPermissionProblem {
+	if strings.TrimSpace(botToken) == "" {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	var problems []ForumPermissionProblem
+	for _, route := range settings.Routes {
+		if _, done := seen[route.ForumChannelID]; done {
+			continue
+		}
+		seen[route.ForumChannelID] = struct{}{}
+		bits, err := forumPermissionGetter(route.ForumChannelID, botToken)
+		if err != nil {
+			slog.Warn("Forum permission check failed", "production_id", productionID, "task_type", route.TaskTypeName, "err", err)
+			problems = append(problems, ForumPermissionProblem{
+				ProductionID:   productionID,
+				ProductionName: productionName,
+				TaskTypeName:   route.TaskTypeName,
+				CheckFailed:    true,
+			})
+			continue
+		}
+		var missingEN, missingJA []string
+		for _, permission := range forumRequiredPermissions {
+			if bits&permission.Bit == 0 {
+				missingEN = append(missingEN, permission.Name)
+				missingJA = append(missingJA, permission.JA)
+			}
+		}
+		if len(missingEN) > 0 {
+			problems = append(problems, ForumPermissionProblem{
+				ProductionID:   productionID,
+				ProductionName: productionName,
+				TaskTypeName:   route.TaskTypeName,
+				MissingEN:      missingEN,
+				MissingJA:      missingJA,
+			})
+		}
+	}
+	return problems
+}
+
+// RefreshForumPermissionProblems checks forum permissions for a Production,
+// persists any problems for the System Status page, and returns problem lines.
+func RefreshForumPermissionProblems(db *gorm.DB, productionID, productionName string, settings model.ProductionForumSettings, botToken string) []string {
+	issues := checkForumPermissionIssues(productionID, productionName, settings, botToken)
+	if db != nil && strings.TrimSpace(productionID) != "" {
+		key := forumPermissionProblemsPrefix + strings.TrimSpace(productionID)
+		if len(issues) == 0 {
+			model.DeleteSetting(db, key)
+		} else if encoded, err := json.Marshal(issues); err == nil {
+			model.SetSetting(db, key, string(encoded))
+		}
+	}
+	lines := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		if issue.CheckFailed {
+			lines = append(lines, fmt.Sprintf("フォーラム %s の権限を確認できませんでした", issue.TaskTypeName))
+		} else if len(issue.MissingJA) > 0 {
+			lines = append(lines, fmt.Sprintf("フォーラム %s でBotに権限が足りません: %s", issue.TaskTypeName, strings.Join(issue.MissingJA, "、")))
+		}
+	}
+	return lines
+}
+
+// LoadAllForumPermissionProblems returns stored forum permission problems for
+// all active Productions.
+func LoadAllForumPermissionProblems(db *gorm.DB) []ForumPermissionProblem {
+	if db == nil {
+		return nil
+	}
+	var out []ForumPermissionProblem
+	for _, project := range model.ListProjects(db) {
+		if project.ValidationOnly || strings.TrimSpace(project.KitsuProjectID) == "" {
+			continue
+		}
+		raw := strings.TrimSpace(model.GetSetting(db, forumPermissionProblemsPrefix+strings.TrimSpace(project.KitsuProjectID)))
+		if raw == "" {
+			continue
+		}
+		var items []ForumPermissionProblem
+		if json.Unmarshal([]byte(raw), &items) == nil {
+			for i := range items {
+				if items[i].ProductionID == "" {
+					items[i].ProductionID = project.KitsuProjectID
+				}
+				if items[i].ProductionName == "" {
+					items[i].ProductionName = project.Name
+				}
+			}
+			out = append(out, items...)
+		}
+	}
+	return out
 }
 
 // checkForumPermissions returns Japanese problems for the routed forums.

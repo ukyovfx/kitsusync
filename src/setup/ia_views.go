@@ -1781,7 +1781,8 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB, pollInt
 	}
 	livenessSection := renderLivenessSection(lang, stats, pollInterval)
 	handoffSection := renderHandoffAttentionSection(lang, db)
-	body := `<div class="section-stack"><section class="section-card glass pipeline-health" aria-labelledby="pipeline-health-title"><div class="page-heading"><div><h2 id="pipeline-health-title">` + esc(t(lang, "通知パイプラインの状態", "Notification pipeline health")) + `</h2><p class="hint">` + esc(t(lang, "通知に関わる各段階の状態を確認できます。取得できないメトリクスは未確認として表示します。", "Review each notification stage. Metrics that are not available are shown as unconfirmed.")) + `</p></div><span class="status-pill ` + esc(readinessView.Class) + `" role="status">` + esc(readinessView.Label) + `</span></div><div class="pipeline-health-grid">` + healthRows.String() + `</div></section>` + livenessSection + handoffSection + issuesSection + `</div>`
+	runtimeConfigBlock := renderSystemStatusRuntimeConfig(lang)
+	body := `<div class="section-stack"><section class="section-card glass pipeline-health" aria-labelledby="pipeline-health-title"><div class="page-heading"><div><h2 id="pipeline-health-title">` + esc(t(lang, "通知パイプラインの状態", "Notification pipeline health")) + `</h2><p class="hint">` + esc(t(lang, "通知に関わる各段階の状態を確認できます。取得できないメトリクスは未確認として表示します。", "Review each notification stage. Metrics that are not available are shown as unconfirmed.")) + `</p></div><span class="status-pill ` + esc(readinessView.Class) + `" role="status">` + esc(readinessView.Label) + `</span></div><div class="pipeline-health-grid">` + healthRows.String() + `</div>` + runtimeConfigBlock + `</section>` + livenessSection + handoffSection + issuesSection + `</div>`
 	body = renderRuntimeObservabilitySummary(lang, stats, readiness, windowName, body)
 	if card := currentProblemCard(lang, r, db, items); card != "" {
 		body = strings.Replace(body, `<div class="section-stack system-status-sections">`, `<div class="section-stack system-status-sections">`+card, 1)
@@ -1875,6 +1876,57 @@ func renderRuntimeObservabilitySummaryRawAt(lang string, stats RuntimeSnapshot, 
 	return `<section class="section-card glass system-observability" aria-labelledby="system-observability-title"><div class="page-heading"><div><h2 id="system-observability-title">` + esc(t(lang, "外部APIの健全性", "External API health")) + `</h2><p class="hint">` + esc(t(lang, "実測できた応答時間を時間順に表示します。", "Shows real response times in chronological order.")) + `</p></div><div class="telemetry-window-actions"><span class="system-live-indicator" role="status"><i aria-hidden="true"></i><span data-system-live-label>` + esc(t(lang, "自動更新", "Auto-refresh")) + `</span></span></div></div><div class="system-observability-grid"><article class="api-observation-card" data-telemetry-card="kitsu"><div class="api-observation-summary"><h3>Kitsu API</h3><span class="status-pill ` + apiObservationStatusClassAt(stats, "kitsu", asOf) + `" role="status" data-telemetry-status>` + esc(apiObservationStatusAt(lang, stats, "kitsu", asOf)) + `</span></div><div class="api-observation-details" data-telemetry-details="kitsu">` + apiObservationDetailsAt(lang, stats, "kitsu", windowName, asOf) + `</div></article><article class="api-observation-card" data-telemetry-card="discord"><div class="api-observation-summary"><h3>Discord API</h3><span class="status-pill ` + apiObservationStatusClassAt(stats, "discord", asOf) + `" role="status" data-telemetry-status>` + esc(apiObservationStatusAt(lang, stats, "discord", asOf)) + `</span></div><div class="api-observation-details" data-telemetry-details="discord">` + apiObservationDetailsAt(lang, stats, "discord", windowName, asOf) + `</div></article></div></section>` + body
 }
 
+// EffectiveRuntimeConfig holds read-only startup conf.toml values surfaced on
+// the System Status page.
+type EffectiveRuntimeConfig struct {
+	IgnoreMessagesDaysOld int
+	TplPreset             string
+}
+
+var (
+	effectiveRuntimeConfigMu sync.RWMutex
+	effectiveRuntimeConfig   EffectiveRuntimeConfig
+)
+
+// SetEffectiveRuntimeConfig records the effective conf.toml values for display
+// on the System Status page.
+func SetEffectiveRuntimeConfig(cfg EffectiveRuntimeConfig) {
+	effectiveRuntimeConfigMu.Lock()
+	effectiveRuntimeConfig = cfg
+	effectiveRuntimeConfigMu.Unlock()
+}
+
+func getEffectiveRuntimeConfig() EffectiveRuntimeConfig {
+	effectiveRuntimeConfigMu.RLock()
+	cfg := effectiveRuntimeConfig
+	effectiveRuntimeConfigMu.RUnlock()
+	return cfg
+}
+
+func renderSystemStatusRuntimeConfig(lang string) string {
+	cfg := getEffectiveRuntimeConfig()
+	lookback := t(lang, "無制限 (0)", "unlimited (0)")
+	if cfg.IgnoreMessagesDaysOld > 0 {
+		lookback = fmt.Sprintf(t(lang, "%d 日", "%d days"), cfg.IgnoreMessagesDaysOld)
+	}
+	preset := strings.TrimSpace(cfg.TplPreset)
+	if preset == "" {
+		preset = t(lang, "既定", "default")
+	}
+	baselineLine := t(lang,
+		"初回起動時の動作: 初回は現在のタスク状態のみを記録し、すでに WFA / RETAKE のタスクには通知を送信しません。",
+		"First-run baseline: records current task state only and does not send notifications for tasks already in WFA/RETAKE.",
+	)
+	confLine := fmt.Sprintf(t(lang,
+		"有効な conf.toml 設定（読み取り専用）: 初回遡り日数 (ignoreMessagesDaysOld) = %s ・ テンプレート (tplPreset) = %s",
+		"Effective conf.toml (read-only): first-run lookback (ignoreMessagesDaysOld) = %s · template preset (tplPreset) = %s",
+	), lookback, preset)
+	return `<div class="pipeline-health-config-meta" data-effective-config-summary style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border-subtle,rgba(255,255,255,0.08));">` +
+		`<p class="field-help">` + esc(baselineLine) + `</p>` +
+		`<p class="field-help">` + esc(confLine) + `</p>` +
+		`</div>`
+}
+
 // currentProblemCard summarizes the first non-OK pipeline row and any
 // missing button-receiver configuration as one compact card at the top of
 // the system status page. When every check is OK it renders nothing.
@@ -1897,6 +1949,30 @@ func currentProblemCard(lang string, r *http.Request, db *gorm.DB, items []pipel
 	}
 	if DiscordApplicationPublicKey(db) == "" && AppOperationPattern(db) != OperationPatternInternal {
 		rows.WriteString(`<div class="current-problem-row"><span class="dot" aria-hidden="true"></span><div class="body">` + esc(t(lang, "Discord ボタンの受け口が未設定です", "The Discord button receiver is not configured")) + `</div><a class="linkbtn" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "接続設定", "Connection settings")) + `</a></div>`)
+	}
+	routeState := evaluatePublicRouteState(db)
+	if routeState.NeedsRoute && (routeState.URLMismatch || !routeState.HasPing) {
+		var msg string
+		if routeState.URLMismatch {
+			msg = t(lang, "公開 HTTPS URL の設定と観測結果が一致していません", "Configured and observed public HTTPS URLs disagree")
+		} else {
+			msg = t(lang, "Discord からの Interactions PING がまだ到達していません", "No Discord Interactions PING has arrived on the public HTTPS route yet")
+		}
+		rows.WriteString(`<div class="current-problem-row"><span class="dot" aria-hidden="true"></span><div class="body">` + esc(msg) + `</div><a class="linkbtn" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "接続設定", "Connection settings")) + `</a></div>`)
+	}
+	for _, prob := range LoadAllForumPermissionProblems(db) {
+		var detail string
+		if prob.CheckFailed {
+			detail = fmt.Sprintf(t(lang, "%s（%s）のフォーラム権限を確認できませんでした", "Could not verify forum permissions for %s (%s)"), prob.ProductionName, prob.TaskTypeName)
+		} else {
+			missing := prob.MissingEN
+			if lang == "ja" {
+				missing = prob.MissingJA
+			}
+			detail = fmt.Sprintf(t(lang, "%s（%s）のフォーラム権限が不足しています: %s", "Missing forum permissions for %s (%s): %s"), prob.ProductionName, prob.TaskTypeName, strings.Join(missing, t(lang, "、", ", ")))
+		}
+		forumURL := withLang("/bot/admin/forum?project="+url.QueryEscape(prob.ProductionID), r)
+		rows.WriteString(`<div class="current-problem-row"><span class="dot" aria-hidden="true"></span><div class="body">` + esc(detail) + `</div><a class="linkbtn" href="` + esc(forumURL) + `">` + esc(t(lang, "フォーラム設定", "Forum settings")) + `</a></div>`)
 	}
 	if rows.Len() == 0 {
 		return ""
